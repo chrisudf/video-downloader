@@ -23,6 +23,55 @@ DEFAULT_UA = (
 _STREAM_INF_RE = re.compile(r"#EXT-X-STREAM-INF:([^\n]+)\n([^\n#]+)")
 _M3U8_IN_HTML_RE = re.compile(r"""(?P<u>https?://[^\s'"<>]+\.m3u8[^\s'"<>]*)""", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"(\d+\.\d+)\s*%")
+_HTTP_STATUS_RE = re.compile(r"\b(\d{3})\b\s*\(([^)]+)\)")
+
+
+def _summarize_failure(log_tail: list[str]) -> str:
+    """Pull a human-readable error out of N_m3u8DL-RE's output, ignoring
+    the .NET stack trace noise."""
+    warn_lines: list[str] = []
+    error_lines: list[str] = []
+    for line in log_tail:
+        # Skip .NET stack frames — after strip() they start with "at " or "---"
+        if line.startswith("at ") or line.startswith("--- ") or line.startswith("System."):
+            continue
+        # Strip ANSI/timestamp prefix
+        clean = re.sub(r"^\d{2}:\d{2}:\d{2}\.\d+\s*", "", line).strip()
+        if re.search(r"\b(WARN|ERROR|Error|Unhandled exception|fail)\b", clean, re.IGNORECASE):
+            if "Exception" in clean or "ERROR" in clean.upper():
+                error_lines.append(clean)
+            else:
+                warn_lines.append(clean)
+
+    joined = " | ".join(error_lines + warn_lines).lower()
+    is_segment_failure = "segment" in joined or "first segment" in joined
+
+    # Try to extract a specific HTTP status — most actionable
+    for line in error_lines + warn_lines:
+        m = _HTTP_STATUS_RE.search(line)
+        if m:
+            code, text = m.groups()
+            if code.startswith("4") and is_segment_failure:
+                return (
+                    f"HTTP {code} {text.strip()} on stream segments — the m3u8 token most likely "
+                    f"expired or is IP-bound to a different network. Re-fetch the URL from the source "
+                    f"page (e.g. via 'Browser sniff') and start the download within the validity window."
+                )
+            if code.startswith("4"):
+                return f"HTTP {code} {text.strip()} — auth/header issue. Try setting Referer to the source page."
+            if code.startswith("5"):
+                return f"HTTP {code} {text.strip()} — CDN server error. Try again later."
+
+    if is_segment_failure:
+        return ("Failed to download stream segments — the m3u8 URL probably expired or is "
+                "IP-bound. Re-sniff and retry within the validity window.")
+
+    # Fallback: first meaningful line
+    for line in error_lines + warn_lines:
+        if "Exception" in line:
+            return f"N_m3u8DL-RE crashed: {line[:180]}"
+        return line[:200]
+    return "N_m3u8DL-RE exited with no recognizable error message"
 
 
 def _origin(url: str) -> str:
@@ -214,6 +263,9 @@ class M3U8Downloader(BaseDownloader):
                     log_tail.append(raw)
                     if len(log_tail) > 50:
                         del log_tail[:-50]
+                    # Suppress .NET stack frames from the live log shown in UI
+                    if raw.startswith("at ") or raw.startswith("--- ") or raw.startswith("System."):
+                        continue
                     m = _PERCENT_RE.search(raw)
                     if m:
                         pct = float(m.group(1))
@@ -243,9 +295,9 @@ class M3U8Downloader(BaseDownloader):
             await on_progress(ProgressEvent(status="error", message="cancelled"))
             raise asyncio.CancelledError("cancelled")
         if rc != 0:
-            tail = " | ".join(log_tail[-5:])
-            await on_progress(ProgressEvent(status="error", message=f"exit {rc}: {tail}"))
-            raise RuntimeError(f"N_m3u8DL-RE exited {rc}: {tail}")
+            reason = _summarize_failure(log_tail)
+            await on_progress(ProgressEvent(status="error", message=reason))
+            raise RuntimeError(reason)
 
         # Find the produced file — N_m3u8DL-RE writes <save-name>.<ext>
         candidates = sorted(save_dir.glob(f"{safe_title}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
