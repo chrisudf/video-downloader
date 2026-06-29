@@ -70,9 +70,35 @@
 - [ ] Post-download hooks (auto-rename, move to category folder, run a custom script)
 
 ### Sniff improvements
-- [ ] Browser extension that pipes detected `.m3u8` from your normal Chrome tab to the local app (no headless needed)
+
+#### ⭐ Chrome extension (cat-catch–style companion) — top priority
+The current Playwright sniff has to spawn a separate Chromium and either autoplay or wait for the user to click play in an unfamiliar window. Cleaner alternative: a Manifest V3 extension that lives in the user's normal Chrome and pipes detected `.m3u8` to this app.
+
+Why it's better than Playwright for most cases:
+- No extra process — uses the browser the user already has open
+- Inherits the user's logged-in session and cookies (works for paid/VIP content)
+- No autoplay simulation — the human just clicks play normally
+- Invisible to anti-bot heuristics that fingerprint headless Chromium
+- Faster end-to-end (no Chromium cold start)
+
+Design sketch:
+1. **Extension** (`extension/` directory in repo)
+   - `manifest.json` (MV3, permissions: `webRequest`, `host_permissions: ["<all_urls>"]`)
+   - `background.js` — listen to `chrome.webRequest.onBeforeRequest`, filter URLs containing `.m3u8` or `.mpd`, dedupe per tab
+   - `popup.html` + `popup.js` — list captured URLs for the current tab with a "Download" button next to each
+   - Button POSTs `{ url, referer, downloader: "m3u8" }` to `http://127.0.0.1:8765/api/download`
+2. **Backend changes**
+   - Add CORS allowlist for `chrome-extension://<our-id>` on `/api/download` and `/api/inspect`
+   - Optional: a "discovered URLs" inbox endpoint so the extension can pre-stage suggestions in the UI even if the user doesn't click the extension popup
+3. **Distribution**
+   - Initially: load unpacked from `extension/` (devloader)
+   - Later: publish to Chrome Web Store; same code works on Edge
+
+Keep the Playwright path as the fallback for headless / scripted use.
+
+#### Other
 - [ ] Better autoplay heuristics for JS-heavy sites (more selectors, JS-injected `<video>.play()`)
-- [ ] User script (Tampermonkey) variant for the above
+- [ ] User script (Tampermonkey) variant of the extension for browsers without extension support
 
 ### UI / UX
 - [ ] Drag-and-drop a URL onto the window
