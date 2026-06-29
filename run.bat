@@ -18,6 +18,8 @@ if not exist ".venv\Scripts\python.exe" (
         pause
         exit /b 1
     )
+    echo [setup] installing Playwright Chromium...
+    ".venv\Scripts\python.exe" -m playwright install chromium
 ) else (
     echo [setup] venv already exists. Skipping install.
 )

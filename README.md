@@ -1,121 +1,166 @@
 # Video Downloader
 
-本地视频下载工具的 Web UI。粘贴 URL → 自动识别类型 → 列出可选清晰度 → 下载到本地。
+A local web UI for downloading videos from YouTube, HLS (`.m3u8`) streams, and JavaScript-heavy video pages. Paste a URL → auto-detect → pick a quality → download to disk.
 
-## 现已支持
-- **YouTube / 1000+ 网站** — 通过 yt-dlp
-- **HLS / m3u8** — 通过 N_m3u8DL-RE (自动加 Referer/UA header)
-
-## 留好的扩展接口
-- DASH / m4s
-- 其他自定义流（实现 `BaseDownloader` 接口即可）
+> ⚠️ **Personal use only.** This is a hobby project for downloading videos you have a right to download. See the [Disclaimer](#disclaimer--免责声明) below.
 
 ---
 
-## 架构
+## Features
 
-```
-┌─────────────┐   HTTP / WS    ┌────────────────────────────────────┐
-│  Frontend   │ ─────────────▶ │           FastAPI Backend          │
-│ (HTML+JS)   │  ◀──────────── │  ┌──────────────────────────────┐  │
-└─────────────┘   progress     │  │ URLDetector                  │  │
-                               │  │  ├─ youtube_dl ext list      │  │
-                               │  │  ├─ direct .m3u8?            │  │
-                               │  │  └─ html scan for m3u8       │  │
-                               │  └──────────────────────────────┘  │
-                               │  ┌──────────────────────────────┐  │
-                               │  │ DownloaderRegistry           │  │
-                               │  │  ├─ YouTubeDownloader  (yt-dlp)│
-                               │  │  ├─ M3U8Downloader (N_m3u8DL-RE)│
-                               │  │  └─ [future] M4SDownloader   │  │
-                               │  └──────────────────────────────┘  │
-                               │  ┌──────────────────────────────┐  │
-                               │  │ DownloadManager              │  │
-                               │  │  · queue · progress · history│  │
-                               │  └──────────────────────────────┘  │
-                               └────────────────────────────────────┘
-                                              │
-                                              ▼
-                                       D:\Videos  (default)
-```
-
-### 关键流程
-
-1. **Inspect** — `POST /api/inspect { url }`
-   - Detector 判断类型：YouTube/HTML/直接 m3u8
-   - 调用对应 Downloader 的 `probe()` 拿到 title + formats[]
-   - 返回 `{ type, title, thumbnail, formats: [{id, label, height, fps, ...}] }`
-
-2. **Download** — `POST /api/download { url, format_id, save_dir? }`
-   - 创建 job，进队列，返回 `job_id`
-   - 立即开始 subprocess (yt-dlp 或 N_m3u8DL-RE)
-
-3. **Progress** — `WS /ws/progress/{job_id}`
-   - 实时推送 stdout 解析后的 `{ percent, speed, eta, status }`
-
-4. **History** — `GET /api/jobs` 列出所有任务
+- **YouTube + 1000+ sites** — via [`yt-dlp`](https://github.com/yt-dlp/yt-dlp)
+- **HLS / `.m3u8`** — via [`N_m3u8DL-RE`](https://github.com/nilaoda/N_m3u8DL-RE), with custom `Referer` / `User-Agent` headers
+- **JS-heavy pages** — Playwright opens a headless (or visible) Chromium and intercepts the actual stream URL from network requests
+- **Direct m3u8 input** — paste a known stream URL with optional `Referer` to skip detection
+- **Plugin-style downloader registry** — add new formats (DASH `.mpd`, fragmented `.m4s`, etc.) by subclassing `BaseDownloader`
+- **Live progress** over WebSocket; queue, cancel, remove, "open folder"
+- **Cross-platform** — Windows, macOS, Linux
 
 ---
 
-## 目录结构
+## Quick start
 
+### Prerequisites
+
+You need **Python 3.10+** and three external tools on your machine:
+
+| Tool | Purpose | Windows | macOS | Linux |
+|---|---|---|---|---|
+| `yt-dlp` | YouTube etc. | `winget install yt-dlp.yt-dlp` or download `yt-dlp.exe` | `brew install yt-dlp` | `pipx install yt-dlp` |
+| `N_m3u8DL-RE` | HLS downloader | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) |
+| `ffmpeg` | Muxing audio + video | `winget install Gyan.FFmpeg` | `brew install ffmpeg` | `sudo apt install ffmpeg` |
+
+If the tools are on `PATH`, you're done. Otherwise edit `config.json` (see below) with absolute paths.
+
+### Run
+
+```bash
+# clone
+git clone <this-repo-url>
+cd video-downloader
+
+# first time only — copy the example config and edit if needed
+cp config.example.json config.json
 ```
-video-downloader/
-├── backend/
-│   ├── main.py              FastAPI 入口
-│   ├── config.py            读 config.json
-│   ├── models.py            Pydantic schemas
-│   ├── detector.py          URL 类型识别 + m3u8 抓取
-│   ├── downloads_manager.py 任务队列 + 进度广播
-│   └── downloaders/
-│       ├── base.py          BaseDownloader 抽象类
-│       ├── registry.py      注册表
-│       ├── youtube.py       yt-dlp 实现
-│       └── m3u8.py          N_m3u8DL-RE 实现
-├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-├── config.json              路径、默认下载目录
-├── requirements.txt
-├── run.bat                  一键启动（建 venv + 启服务 + 开浏览器）
-└── README.md
-```
 
----
+Then:
 
-## TODO
+- **Windows** — double-click `run.bat`
+- **macOS / Linux** — `chmod +x run.sh && ./run.sh`
 
-- [x] 项目骨架
-- [x] FastAPI 后端 + 配置
-- [x] Downloader 插件接口
-- [x] YouTube downloader（yt-dlp Python API）
-- [x] m3u8 detector（HTML 扫描 + 直链）
-- [x] m3u8 downloader（N_m3u8DL-RE subprocess）
-- [x] WebSocket 进度推送
-- [x] 前端 UI（URL 输入 / 清晰度选 / 进度 / 历史）
-- [x] run.bat 启动脚本
-- [ ] **后续：** DASH/m4s downloader
-- [ ] **后续：** Cookie 导入（下付费/会员视频）
-- [ ] **后续：** 字幕下载选项
-- [ ] **后续：** 同时多任务并发上限调节
+The first run creates a virtualenv, installs Python deps, and downloads Playwright Chromium (~170 MB). Subsequent runs skip all that.
 
----
+Open <http://127.0.0.1:8765> in your browser.
 
-## 使用
+### Configuration
 
-1. 双击 `run.bat`（首次会自动建虚拟环境并装依赖）
-2. 浏览器打开 http://127.0.0.1:8765
-3. 粘贴 URL → 点 **Inspect** → 选清晰度 → **Download**
-
-### 配置 (`config.json`)
+`config.json` overrides defaults. Paths support `~` for home directory:
 
 ```json
 {
-  "save_dir": "D:\\Videos",
-  "ytdlp_path": "C:\\yt-dlp.exe",
-  "m3u8dl_path": "C:\\N_m3u8DL-RE.exe",
-  "ffmpeg_path": "C:\\ffmpeg\\ffmpeg-7.1.1-essentials_build\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe",
-  "port": 8765
+  "save_dir": "~/Downloads/VideoDownloader",
+  "ytdlp_path": "yt-dlp",
+  "m3u8dl_path": "N_m3u8DL-RE",
+  "ffmpeg_path": "ffmpeg",
+  "port": 8765,
+  "max_concurrent_downloads": 2
 }
 ```
+
+Settings are also editable from the gear icon in the UI.
+
+---
+
+## How it works
+
+```
+Paste URL ──▶ /api/inspect
+                │
+                ├─ matches youtube.com / m3u8 / known site
+                │        └─▶ probe via yt-dlp or HTTP fetch
+                │                  └─▶ list of qualities
+                │
+                └─ generic page
+                         └─ HTML regex scan for .m3u8
+                                  └─ if nothing, headless Playwright sniff
+                                          └─ if still nothing → suggest manual sniff
+
+Pick quality ──▶ /api/download
+                          └─▶ subprocess (yt-dlp or N_m3u8DL-RE)
+                                  └─▶ WebSocket progress → UI
+                                  └─▶ file lands in save_dir
+```
+
+**Plugin interface** — see [`backend/downloaders/base.py`](backend/downloaders/base.py). To support a new format, subclass `BaseDownloader`, implement `can_handle`, `probe`, `download`, and decorate with `@register`. No other files need to change.
+
+---
+
+## Project layout
+
+```
+backend/
+  main.py                    FastAPI app + routes
+  config.py                  Loads config.json with sensible defaults
+  models.py                  Pydantic schemas
+  detector.py                Routes URLs to downloaders
+  downloads_manager.py       Job queue + progress broadcast
+  browser_sniff.py           Playwright-based m3u8 sniff
+  downloaders/
+    base.py                  BaseDownloader abstract class
+    registry.py              @register decorator
+    youtube.py               yt-dlp wrapper
+    m3u8_dl.py               N_m3u8DL-RE wrapper
+
+frontend/
+  index.html                 Single-page UI
+  style.css
+  app.js                     Vanilla JS, no build step
+
+run.bat / run.sh             Cross-platform launchers
+requirements.txt
+config.example.json
+```
+
+---
+
+## Roadmap
+
+See [`TODO.md`](TODO.md) for the full punch list of completed work and planned improvements.
+
+---
+
+## Disclaimer / 免责声明
+
+### English
+
+This software is provided **for personal, non-commercial use only**. It is a thin wrapper around well-known open-source tools (`yt-dlp`, `N_m3u8DL-RE`, `ffmpeg`, Playwright) and does not itself bypass DRM or circumvent any technical protection measure.
+
+You are solely responsible for how you use it. Before downloading any content, you must:
+
+1. Verify that you have the legal right to download the material in your jurisdiction (e.g. content you own, public-domain works, content licensed for offline use, or material whose platform's Terms of Service permit personal downloads).
+2. Comply with the source platform's Terms of Service.
+3. Respect copyright, trademark, privacy, and any other applicable law.
+
+**Commercial use is prohibited.** Do not redistribute downloaded content, do not host it publicly, do not sell it, and do not use this tool as part of a commercial product or service.
+
+The authors and contributors of this project accept **no liability** for any misuse, damages, legal claims, or losses arising from use of this software. Use entirely at your own risk. If you are unsure whether a particular use is legal, **do not use this tool** and consult a lawyer.
+
+### 中文
+
+本软件**仅供个人非商业用途**，本质上是对 `yt-dlp`、`N_m3u8DL-RE`、`ffmpeg`、Playwright 等知名开源工具的封装，本身不破解 DRM，不绕过任何技术保护措施。
+
+使用者对自己的使用行为负完全责任。下载任何内容之前，你必须：
+
+1. 确认在你所在司法管辖区内拥有合法的下载权利（例如：你自己拥有的内容、公有领域作品、明确授权离线使用的内容、平台服务条款允许个人下载的素材）。
+2. 遵守源平台的服务条款。
+3. 尊重版权、商标、隐私及其他相关法律。
+
+**禁止商业用途。** 不得二次传播下载内容，不得公开托管，不得售卖，不得将本工具用作任何商业产品或服务的一部分。
+
+本项目作者及贡献者对因使用本软件产生的任何**滥用、损害、法律纠纷或损失概不负责**。使用风险自负。如果你不确定某项使用是否合法，**请勿使用本工具**并咨询专业律师。
+
+---
+
+## License
+
+This source code is released under the [MIT License](LICENSE) for personal use, subject to the disclaimer above. The third-party tools it depends on (`yt-dlp`, `N_m3u8DL-RE`, `ffmpeg`, Playwright) are each governed by their own respective licenses.

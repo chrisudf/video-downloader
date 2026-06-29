@@ -1,8 +1,8 @@
 {
-  "save_dir": "D:\\Videos",
-  "ytdlp_path": "C:\\yt-dlp.exe",
-  "m3u8dl_path": "C:\\N_m3u8DL-RE.exe",
-  "ffmpeg_path": "C:\\ffmpeg\\bin\\ffmpeg.exe",
+  "save_dir": "~/Downloads/VideoDownloader",
+  "ytdlp_path": "yt-dlp",
+  "m3u8dl_path": "N_m3u8DL-RE",
+  "ffmpeg_path": "ffmpeg",
   "port": 8765,
   "max_concurrent_downloads": 2
 }

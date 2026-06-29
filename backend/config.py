@@ -1,25 +1,45 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.json"
 
+# Cross-platform defaults. On Windows, executables typically need ".exe" and
+# may live at well-known absolute paths. On macOS / Linux they're usually on
+# PATH after `brew install` / `pip install`.
+_IS_WIN = sys.platform == "win32"
+
 _DEFAULTS: dict[str, Any] = {
-    "save_dir": str(Path.home() / "Downloads"),
-    "ytdlp_path": "yt-dlp",
-    "m3u8dl_path": "N_m3u8DL-RE",
-    "ffmpeg_path": "ffmpeg",
+    "save_dir": str(Path.home() / "Downloads" / "VideoDownloader"),
+    "ytdlp_path": "yt-dlp.exe" if _IS_WIN else "yt-dlp",
+    "m3u8dl_path": "N_m3u8DL-RE.exe" if _IS_WIN else "N_m3u8DL-RE",
+    "ffmpeg_path": "ffmpeg.exe" if _IS_WIN else "ffmpeg",
     "port": 8765,
     "max_concurrent_downloads": 2,
 }
 
 
+def _expand(value: Any) -> Any:
+    """Expand ~ and environment variables in any path-shaped string."""
+    if isinstance(value, str) and value:
+        # Treat as path if it contains ~ or env-var syntax; otherwise pass through
+        if value.startswith("~") or "$" in value or "%" in value:
+            return str(Path(value).expanduser())
+    return value
+
+
 class Config:
     def __init__(self, data: dict[str, Any]):
-        self._data = {**_DEFAULTS, **data}
+        merged = {**_DEFAULTS, **data}
+        # Expand ~ in any path-like value so users can write "~/Videos" in config.json
+        for k in ("save_dir", "ytdlp_path", "m3u8dl_path", "ffmpeg_path"):
+            if k in merged:
+                merged[k] = _expand(merged[k])
+        self._data = merged
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
