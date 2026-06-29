@@ -1,0 +1,43 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Project — local config has absolute paths specific to a single machine
+config.json
+downloads/
+*.log
+
+# Stray downloaded artifacts (N_m3u8DL-RE writes here when save_dir defaults to cwd)
+chunklist/
+video/
+test_*/
+*.ts
+*.m4s
+*.tmp
+
+# Playwright
+.playwright/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build artifacts
+/dist/
+/build/

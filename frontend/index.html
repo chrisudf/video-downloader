@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Downloader</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>📥 Video Downloader</h1>
+    <button id="settings-btn" title="设置">⚙</button>
+  </header>
+
+  <section class="card">
+    <div class="row">
+      <input
+        id="url-input"
+        type="text"
+        placeholder="粘贴 YouTube / m3u8 / 视频网站 URL …"
+        autocomplete="off"
+      />
+      <input
+        id="referer-input"
+        type="text"
+        placeholder="Referer（可选，m3u8 防盗链用）"
+      />
+      <button id="inspect-btn" class="primary">Inspect</button>
+    </div>
+    <div id="inspect-status" class="status"></div>
+    <div id="sniff-actions" class="hidden" style="margin-top:10px">
+      <button id="sniff-btn">在浏览器中打开抓取 (复杂 JS 站点)</button>
+      <span class="muted small" style="margin-left:8px">会开一个 Chromium 窗口，你点播放，关掉广告，工具自动抓 m3u8</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>直接通过 m3u8 下载（绕过 Inspect）</summary>
+      <div style="margin-top:12px">
+        <div class="row">
+          <input id="direct-m3u8-url" type="text" placeholder=".m3u8 URL" />
+          <input id="direct-m3u8-referer" type="text" placeholder="Referer（如该站防盗链则必填）" />
+          <button id="direct-m3u8-btn" class="primary">下载</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <input id="direct-m3u8-title" type="text" placeholder="文件名（不含扩展名，可选）" />
+          <input id="direct-m3u8-quality" type="text" placeholder="清晰度 (best / res=1920x1080)，留空即 best" />
+          <input id="direct-m3u8-save" type="text" placeholder="保存目录（可选）" />
+        </div>
+        <div id="direct-m3u8-status" class="status"></div>
+      </div>
+    </details>
+  </section>
+
+  <section id="result" class="card hidden">
+    <div class="result-head">
+      <img id="thumb" alt="" />
+      <div class="result-meta">
+        <h2 id="title"></h2>
+        <div id="meta-line" class="muted"></div>
+        <div id="downloader-line" class="muted small"></div>
+      </div>
+    </div>
+
+    <div class="formats">
+      <label for="format-select">清晰度</label>
+      <select id="format-select"></select>
+      <input id="save-dir-input" type="text" placeholder="保存目录" />
+      <button id="download-btn" class="primary">Download</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>下载任务</h2>
+      <div>
+        <button id="clear-finished" class="link">清除已完成</button>
+        <button id="refresh-jobs" class="link">刷新</button>
+      </div>
+    </div>
+    <ul id="jobs-list"></ul>
+  </section>
+
+  <dialog id="settings-dialog">
+    <form method="dialog" id="settings-form">
+      <h2>设置</h2>
+      <label>保存目录 <input name="save_dir" type="text" required /></label>
+      <label>yt-dlp 路径 <input name="ytdlp_path" type="text" /></label>
+      <label>N_m3u8DL-RE 路径 <input name="m3u8dl_path" type="text" /></label>
+      <label>ffmpeg 路径 <input name="ffmpeg_path" type="text" /></label>
+      <label>同时下载数 <input name="max_concurrent_downloads" type="number" min="1" max="10" /></label>
+      <div class="dialog-actions">
+        <button type="button" id="settings-cancel">取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
