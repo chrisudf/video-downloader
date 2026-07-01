@@ -191,8 +191,7 @@ class M3U8Downloader(BaseDownloader):
         if not Path(m3u8_path).exists():
             raise FileNotFoundError(f"N_m3u8DL-RE not found at {m3u8_path}. Check config.json")
 
-        base = (request.filename_override or request.title or "video").strip()
-        safe_title = re.sub(r"[\\/:*?\"<>|]", "_", base).strip() or "video"
+        safe_title = re.sub(r"[\\/:*?\"<>|]", "_", (request.title or "video")).strip() or "video"
 
         args: list[str] = [
             m3u8_path,

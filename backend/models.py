@@ -44,10 +44,6 @@ class DownloadRequest(BaseModel):
     format_id: str
     downloader: str
     title: Optional[str] = None
-    # Explicit filename override typed by the user. When set, downloaders use
-    # this verbatim (sanitized) as the output stem. When None, they fall back
-    # to their own default (metadata for YouTube, m3u8 path stem, etc.)
-    filename_override: Optional[str] = None
     save_dir: Optional[str] = None
     headers: dict[str, str] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)

@@ -17,17 +17,12 @@ downloads/
 *.log
 
 # Stray downloaded artifacts (N_m3u8DL-RE writes here when save_dir defaults to cwd)
-# raw.m3u8 + meta.json are the tell-tale signatures of a partial download
 chunklist/
 video/
 test_*/
-phn_test/
 *.ts
 *.m4s
 *.tmp
-raw.m3u8
-meta.json
-meta_selected.json
 
 # Playwright
 .playwright/
