@@ -61,7 +61,13 @@ async def inspect(req: InspectRequest) -> InspectResult:
                 "Install Playwright for browser-based sniffing of arbitrary sites."
             ),
         )
-    result = await sniff(req.url, mode="headless", referer=req.referer, timeout_seconds=18)
+    try:
+        result = await sniff(req.url, mode="headless", referer=req.referer, timeout_seconds=18)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"Browser sniff failed: {e}. Try 'Open browser to sniff' for manual mode.",
+        )
     if not result.media:
         raise HTTPException(
             status_code=400,
@@ -72,9 +78,22 @@ async def inspect(req: InspectRequest) -> InspectResult:
             ),
         )
     first = result.media[0]
-    # Probe the discovered m3u8 via the m3u8 downloader
+    # Probe the discovered m3u8 via the m3u8 downloader. If probing the freshly
+    # captured URL fails (e.g. token was already invalid, CDN returned 4xx),
+    # surface the whole sniff list to the client so it can offer alternatives
+    # or the direct-m3u8 form.
     from .downloaders.m3u8_dl import M3U8Downloader
-    probe = await M3U8Downloader().probe(first.url, referer=first.referer or req.referer or req.url)
+    try:
+        probe = await M3U8Downloader().probe(first.url, referer=first.referer or req.referer or req.url)
+    except Exception as e:  # noqa: BLE001
+        alt = " | ".join(m.url[:80] for m in result.media[:3])
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Sniff found {len(result.media)} m3u8 URL(s) but probing the first one failed: {e}. "
+                f"Try 'Open browser to sniff' for a fresh URL, or paste one of these into the direct m3u8 form: {alt}"
+            ),
+        )
     probe.source_url = req.url
     return probe
 
@@ -92,7 +111,10 @@ async def browser_sniff(req: SniffRequest) -> dict[str, Any]:
     if not sniff_available():
         raise HTTPException(500, "Playwright is not installed")
     mode = "headed" if req.mode == "headed" else "headless"
-    result = await sniff(req.url, mode=mode, referer=req.referer, timeout_seconds=req.timeout_seconds)
+    try:
+        result = await sniff(req.url, mode=mode, referer=req.referer, timeout_seconds=req.timeout_seconds)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Browser sniff crashed: {e}")
     return {
         "page_url": result.page_url,
         "media": [
