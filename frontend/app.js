@@ -87,19 +87,11 @@ sniffBtn.addEventListener("click", async () => {
       inspectStatus.className = "status error";
       return;
     }
-    // Pick the first media URL — usually the master playlist
-    const first = data.media[0];
-    inspectStatus.textContent = `抓到 ${data.media.length} 个 m3u8，正在解析变体…`;
-    const probe = await api("/api/inspect", {
-      method: "POST",
-      body: JSON.stringify({
-        url: first.url,
-        referer: first.referer || url,
-      }),
-    });
-    currentInspection = probe;
-    renderInspection(probe);
-    inspectStatus.textContent = `✓ 从浏览器抓到 ${probe.formats.length} 个格式`;
+    // Preserve all captured URLs so the user can switch source if the first isn't the right one.
+    await probeSniffedSource(data.media[0], data.media, url);
+    inspectStatus.textContent = data.media.length > 1
+      ? `✓ 抓到 ${data.media.length} 个 m3u8（默认用第一个，可下方切换）`
+      : `✓ 从浏览器抓到 m3u8`;
     inspectStatus.className = "status ok";
     sniffActions.classList.add("hidden");
   } catch (e) {
@@ -107,6 +99,41 @@ sniffBtn.addEventListener("click", async () => {
     inspectStatus.className = "status error";
   } finally {
     sniffBtn.disabled = false;
+  }
+});
+
+async function probeSniffedSource(chosen, allCandidates, originalPageUrl) {
+  const probe = await api("/api/inspect", {
+    method: "POST",
+    body: JSON.stringify({
+      url: chosen.url,
+      referer: chosen.referer || originalPageUrl,
+    }),
+  });
+  probe.sniff_candidates = allCandidates;
+  probe.sniff_page_url = originalPageUrl;
+  probe.sniff_selected_index = allCandidates.findIndex(c => c.url === chosen.url);
+  currentInspection = probe;
+  renderInspection(probe);
+}
+
+const sniffAltEl = $("sniff-alternatives");
+const sniffSourceSelect = $("sniff-source");
+
+sniffSourceSelect.addEventListener("change", async () => {
+  if (!currentInspection || !currentInspection.sniff_candidates) return;
+  const idx = parseInt(sniffSourceSelect.value, 10);
+  const cand = currentInspection.sniff_candidates[idx];
+  if (!cand) return;
+  inspectStatus.textContent = "切换源，正在重新解析…";
+  inspectStatus.className = "status";
+  try {
+    await probeSniffedSource(cand, currentInspection.sniff_candidates, currentInspection.sniff_page_url);
+    inspectStatus.textContent = "✓ 已切换";
+    inspectStatus.className = "status ok";
+  } catch (e) {
+    inspectStatus.textContent = `× 切换失败: ${e.message}`;
+    inspectStatus.className = "status error";
   }
 });
 
@@ -139,6 +166,30 @@ function renderInspection(data) {
     opt.textContent = label;
     formatSelect.appendChild(opt);
   }
+
+  // Multi-source picker: only shown when browser sniff captured more than one m3u8
+  const cands = data.sniff_candidates || [];
+  if (cands.length > 1) {
+    sniffAltEl.classList.remove("hidden");
+    sniffSourceSelect.innerHTML = "";
+    cands.forEach((c, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      // Show short label + tail of URL so users can distinguish
+      const u = new URL(c.url);
+      const tail = u.pathname.split("/").pop() || u.pathname;
+      opt.textContent = `[${i + 1}] ${u.host}  …/${truncate(tail, 40)}`;
+      sniffSourceSelect.appendChild(opt);
+    });
+    sniffSourceSelect.value = String(data.sniff_selected_index ?? 0);
+  } else {
+    sniffAltEl.classList.add("hidden");
+  }
+
+  // Reset filename input — user can override the derived title
+  $("filename-input").value = "";
+  $("filename-input").placeholder =
+    `自定义文件名（留空则用 "${(data.title || "video").slice(0, 40)}"）`;
 }
 
 // ===== Download =====
@@ -148,6 +199,7 @@ downloadBtn.addEventListener("click", async () => {
   const data = currentInspection;
   downloadBtn.disabled = true;
   try {
+    const customName = $("filename-input").value.trim();
     const job = await api("/api/download", {
       method: "POST",
       body: JSON.stringify({
@@ -155,6 +207,7 @@ downloadBtn.addEventListener("click", async () => {
         format_id: fid,
         downloader: data.downloader,
         title: data.title,
+        filename_override: customName || null,
         save_dir: saveDirInput.value.trim() || null,
         headers: data.headers || {},
       }),
@@ -190,7 +243,7 @@ $("direct-m3u8-btn").addEventListener("click", async () => {
         url,
         format_id: fid,
         downloader: "m3u8",
-        title,
+        filename_override: title,
         save_dir: saveDir,
         headers,
       }),
