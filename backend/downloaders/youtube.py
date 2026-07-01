@@ -112,13 +112,7 @@ class YouTubeDownloader(BaseDownloader):
                 f"yt-dlp not found at {ytdlp}. Set 'ytdlp_path' in config.json."
             )
 
-        # Explicit user-typed filename wins. Otherwise use yt-dlp's own template.
-        custom = (request.filename_override or "").strip()
-        if custom:
-            safe = re.sub(r'[\\/:*?"<>|]', "_", custom)
-            outtmpl = str(save_dir / f"{safe}.%(ext)s")
-        else:
-            outtmpl = str(save_dir / "%(title)s [%(id)s].%(ext)s")
+        outtmpl = str(save_dir / "%(title)s [%(id)s].%(ext)s")
         args = [
             ytdlp,
             request.url,
