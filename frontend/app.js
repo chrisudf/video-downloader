@@ -117,7 +117,6 @@ async function probeSniffedSource(chosen, allCandidates, originalPageUrl) {
   renderInspection(probe);
 }
 
-const sniffAltEl = $("sniff-alternatives");
 const sniffSourceSelect = $("sniff-source");
 
 sniffSourceSelect.addEventListener("change", async () => {
@@ -125,6 +124,7 @@ sniffSourceSelect.addEventListener("change", async () => {
   const idx = parseInt(sniffSourceSelect.value, 10);
   const cand = currentInspection.sniff_candidates[idx];
   if (!cand) return;
+  $("sniff-open-external").href = cand.url;
   inspectStatus.textContent = "切换源，正在重新解析…";
   inspectStatus.className = "status";
   try {
@@ -139,6 +139,22 @@ sniffSourceSelect.addEventListener("change", async () => {
 
 urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") inspectBtn.click();
+});
+
+$("sniff-copy").addEventListener("click", async () => {
+  if (!currentInspection || !currentInspection.sniff_candidates) return;
+  const idx = parseInt(sniffSourceSelect.value, 10) || 0;
+  const cand = currentInspection.sniff_candidates[idx];
+  if (!cand) return;
+  try {
+    await navigator.clipboard.writeText(cand.url);
+    const btn = $("sniff-copy");
+    const orig = btn.textContent;
+    btn.textContent = "已复制 ✓";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (e) {
+    alert("复制失败：" + e.message + "\n\n" + cand.url);
+  }
 });
 
 function renderInspection(data) {
@@ -167,29 +183,41 @@ function renderInspection(data) {
     formatSelect.appendChild(opt);
   }
 
-  // Multi-source picker: only shown when browser sniff captured more than one m3u8
+  // Show the sniffed m3u8 URL(s) whenever the source came from browser sniff,
+  // even if only one was captured — so the user can see & verify it.
   const cands = data.sniff_candidates || [];
-  if (cands.length > 1) {
-    sniffAltEl.classList.remove("hidden");
+  const sniffInfoEl = $("sniff-source-info");
+  if (cands.length >= 1) {
+    sniffInfoEl.classList.remove("hidden");
     sniffSourceSelect.innerHTML = "";
     cands.forEach((c, i) => {
       const opt = document.createElement("option");
       opt.value = i;
-      // Show short label + tail of URL so users can distinguish
       const u = new URL(c.url);
       const tail = u.pathname.split("/").pop() || u.pathname;
-      opt.textContent = `[${i + 1}] ${u.host}  …/${truncate(tail, 40)}`;
+      opt.textContent = cands.length > 1
+        ? `[${i + 1}] ${u.host}  …/${truncate(tail, 44)}`
+        : `${u.host}  …/${truncate(tail, 60)}`;
+      opt.title = c.url;   // hover shows full URL
       sniffSourceSelect.appendChild(opt);
     });
     sniffSourceSelect.value = String(data.sniff_selected_index ?? 0);
+    // Adjust label wording based on count
+    $("sniff-source-label").textContent = cands.length > 1
+      ? `从浏览器抓到 ${cands.length} 个 m3u8，可切换：`
+      : "从浏览器抓到的 m3u8:";
+    // Single-URL select loses "click to open" affordance; disable interaction if only 1
+    sniffSourceSelect.disabled = (cands.length <= 1);
+    // Wire the external-open link to the currently selected URL
+    $("sniff-open-external").href = cands[data.sniff_selected_index ?? 0].url;
   } else {
-    sniffAltEl.classList.add("hidden");
+    sniffInfoEl.classList.add("hidden");
   }
 
   // Reset filename input — user can override the derived title
   $("filename-input").value = "";
   $("filename-input").placeholder =
-    `自定义文件名（留空则用 "${(data.title || "video").slice(0, 40)}"）`;
+    `留空则用 "${(data.title || "video").slice(0, 40)}"`;
 }
 
 // ===== Download =====

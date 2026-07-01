@@ -63,9 +63,17 @@
       </div>
     </div>
 
-    <div id="sniff-alternatives" class="hidden" style="margin-bottom:10px">
-      <label class="muted small" for="sniff-source">抓到多个 m3u8，选择要下载的源</label>
-      <select id="sniff-source" style="margin-top:4px"></select>
+    <div id="sniff-source-info" class="hidden">
+      <div class="sniff-source-head">
+        <span class="muted small" id="sniff-source-label">从浏览器抓到的 m3u8:</span>
+        <button type="button" id="sniff-copy" class="link small">复制</button>
+      </div>
+      <div class="sniff-source-body">
+        <select id="sniff-source"></select>
+        <a id="sniff-open-external" class="muted small" target="_blank" rel="noopener">
+          在新标签打开 ↗
+        </a>
+      </div>
     </div>
 
     <div class="formats">
@@ -74,8 +82,10 @@
       <input id="save-dir-input" type="text" placeholder="保存目录" />
       <button id="download-btn" class="primary">Download</button>
     </div>
-    <div class="row" style="margin-top:8px">
-      <input id="filename-input" type="text" placeholder="自定义文件名（不含扩展名，留空则用视频标题）" />
+
+    <div class="filename-row">
+      <label for="filename-input" class="muted small">文件名</label>
+      <input id="filename-input" type="text" placeholder="留空则用视频标题；不含扩展名" />
     </div>
   </section>
 
