@@ -20,18 +20,6 @@ _DEFAULTS: dict[str, Any] = {
     "ffmpeg_path": "ffmpeg.exe" if _IS_WIN else "ffmpeg",
     "port": 8765,
     "max_concurrent_downloads": 2,
-    # YouTube's "Sign in to confirm you're not a bot" check needs cookies for
-    # many videos. Set to "chrome" / "edge" / "firefox" / "brave" / "opera" /
-    # "safari" (macOS) / "chromium" to auto-import cookies from that browser
-    # profile. Leave empty to try without cookies first.
-    #
-    # On modern Windows Chrome (127+) uses app-bound encryption that yt-dlp
-    # cannot decrypt — install Firefox, or export cookies with a browser
-    # extension and set `youtube_cookies_file` below to that file's path.
-    "youtube_cookies_from": "chrome",
-    # Optional: absolute path to a Netscape/Mozilla-format cookies.txt file.
-    # Wins over youtube_cookies_from when set.
-    "youtube_cookies_file": "",
 }
 
 
@@ -48,7 +36,7 @@ class Config:
     def __init__(self, data: dict[str, Any]):
         merged = {**_DEFAULTS, **data}
         # Expand ~ in any path-like value so users can write "~/Videos" in config.json
-        for k in ("save_dir", "ytdlp_path", "m3u8dl_path", "ffmpeg_path", "youtube_cookies_file"):
+        for k in ("save_dir", "ytdlp_path", "m3u8dl_path", "ffmpeg_path"):
             if k in merged:
                 merged[k] = _expand(merged[k])
         self._data = merged

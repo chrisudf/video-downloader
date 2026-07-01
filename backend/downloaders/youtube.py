@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -33,7 +32,7 @@ _PROGRESS_RE = re.compile(
 _DEST_RE = re.compile(r"\[(?:download|Merger|ExtractAudio)\]\s+(?:Destination|Merging formats into):?\s+\"?(?P<path>.+?)\"?$")
 
 
-def _make_probe_opts(cookies_browser: Optional[str] = None) -> dict[str, Any]:
+def _make_probe_opts() -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
@@ -43,43 +42,7 @@ def _make_probe_opts(cookies_browser: Optional[str] = None) -> dict[str, Any]:
     ff_dir = Path(config.ffmpeg_path).parent
     if ff_dir.exists():
         opts["ffmpeg_location"] = str(ff_dir)
-    # A manually exported cookies file is the most reliable option on modern
-    # Windows Chrome (App-Bound Encryption bypasses --cookies-from-browser).
-    cookies_file = getattr(config, "youtube_cookies_file", "") or ""
-    if cookies_file and Path(cookies_file).is_file():
-        opts["cookiefile"] = cookies_file
-    elif cookies_browser:
-        opts["cookiesfrombrowser"] = (cookies_browser,)
     return opts
-
-
-_BOT_CHECK_RE = re.compile(r"Sign in to confirm|not a bot|cookies for the authentication", re.IGNORECASE)
-
-# Remember which cookie-browser worked most recently so the download path uses
-# the same one instead of re-walking the fallback chain (and possibly wasting a
-# partial download attempt on a broken browser).
-_LAST_WORKING_BROWSER: Optional[str] = None
-_COOKIE_UNAVAILABLE_RE = re.compile(
-    r"Could not copy .* cookie database|Failed to load cookies|does not exist|"
-    r"Failed to decrypt with DPAPI|no supported browsers found|"
-    r"could not find .* (cookie|profile|database|installation)",
-    re.IGNORECASE,
-)
-
-
-def _cookie_browser_chain() -> list[str]:
-    """The browser to try first (from config), then a fallback list."""
-    primary = getattr(config, "youtube_cookies_from", "") or ""
-    fallbacks = ["chrome", "edge", "brave", "firefox", "chromium", "opera"]
-    if sys.platform == "darwin":
-        fallbacks.append("safari")
-    chain: list[str] = []
-    if primary:
-        chain.append(primary)
-    for b in fallbacks:
-        if b not in chain:
-            chain.append(b)
-    return chain
 
 
 @register
@@ -91,54 +54,11 @@ class YouTubeDownloader(BaseDownloader):
         return bool(_YT_HOST_RE.match(url))
 
     async def probe(self, url: str, *, referer: Optional[str] = None) -> InspectResult:
-        def _run(browser: Optional[str]) -> dict[str, Any]:
-            with yt_dlp.YoutubeDL(_make_probe_opts(cookies_browser=browser)) as ydl:
+        def _run() -> dict[str, Any]:
+            with yt_dlp.YoutubeDL(_make_probe_opts()) as ydl:
                 return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
 
-        info: Optional[dict[str, Any]] = None
-        # 1. Try without cookies first — most public videos still work
-        try:
-            info = await asyncio.to_thread(_run, None)
-        except yt_dlp.utils.DownloadError as e:
-            if not _BOT_CHECK_RE.search(str(e)):
-                raise
-            # 2. Fall back to browser cookies, walking the config → chrome → edge → …
-            #    chain until one succeeds. Skip any that hit a "cookie DB locked"
-            #    error (browser is running with exclusive lock).
-            tried: list[str] = []
-            last_err: Optional[Exception] = e
-            global _LAST_WORKING_BROWSER
-            for browser in _cookie_browser_chain():
-                tried.append(browser)
-                try:
-                    info = await asyncio.to_thread(_run, browser)
-                    _LAST_WORKING_BROWSER = browser
-                    break
-                except yt_dlp.utils.DownloadError as sub:
-                    last_err = sub
-                    if _COOKIE_UNAVAILABLE_RE.search(str(sub)):
-                        continue  # this browser can't be read — try next
-                    if _BOT_CHECK_RE.search(str(sub)):
-                        continue  # cookies were readable but didn't help
-                    raise
-            if info is None:
-                raise RuntimeError(
-                    "YouTube requires cookies for this video and no installed browser worked "
-                    f"(tried: {', '.join(tried)}). On modern Windows Chrome (127+) the cookie "
-                    "database is protected by app-bound encryption that yt-dlp cannot decrypt. "
-                    "Pick one of these fixes:\n"
-                    " 1. Install Firefox → Settings ⚙ → 'YouTube cookies from' → Firefox (its "
-                    "cookies aren't affected).\n"
-                    " 2. Export cookies to a file:\n"
-                    "    a. Install a 'Get cookies.txt LOCALLY' extension in Chrome (or any browser "
-                    "where you're logged into YouTube).\n"
-                    "    b. Visit youtube.com, click the extension, export cookies.txt.\n"
-                    "    c. In Settings ⚙, paste the file path into 'YouTube cookies 文件'.\n"
-                    " 3. Or close every Chrome window/process (including Task Manager background "
-                    "instances) and retry — that unlocks the older non-DPAPI cookie DB.\n"
-                    f"Last error: {str(last_err)[:200]}"
-                )
-        assert info is not None
+        info = await asyncio.to_thread(_run)
 
         if info.get("_type") == "playlist" and info.get("entries"):
             entries = [e for e in info["entries"] if e]
@@ -214,18 +134,6 @@ class YouTubeDownloader(BaseDownloader):
         ff_dir = Path(config.ffmpeg_path).parent
         if ff_dir.exists():
             args += ["--ffmpeg-location", str(ff_dir)]
-
-        # Cookies for the YouTube bot check. Precedence:
-        #   1. Manually exported cookies.txt (most reliable on modern Chrome)
-        #   2. Browser that recently worked for probe (cached)
-        #   3. Configured default browser
-        cookies_file = getattr(config, "youtube_cookies_file", "") or ""
-        if cookies_file and Path(cookies_file).is_file():
-            args += ["--cookies", cookies_file]
-        else:
-            browser = _LAST_WORKING_BROWSER or getattr(config, "youtube_cookies_from", "")
-            if browser:
-                args += ["--cookies-from-browser", browser]
 
         # Pass through any user-supplied headers (cookies, custom Referer, ...)
         for k, v in request.headers.items():
