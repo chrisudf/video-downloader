@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
-import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,11 +11,16 @@ from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
 from .registry import register
 
-# yt-dlp Python package — used for probing (fast metadata extraction).
-# For the actual download we shell out to the user's yt-dlp.exe, which is
-# more robust against YouTube's changing anti-bot machinery and tracks the
-# exe's own update cadence (the pip package often needs PO tokens).
-import yt_dlp
+# We shell out to the user's yt-dlp.exe for BOTH probe and download. Rationale:
+# YouTube's anti-bot machinery (n-challenge, PO tokens, "confirm you're not a
+# bot") is a moving target the yt-dlp team patches constantly. A standalone
+# yt-dlp.exe binary ships with a bundled JS runtime and updates as one blob;
+# the pip package requires an external JS runtime (deno) and often breaks
+# between releases. Using the exe for probe too means both paths share the
+# same reliability characteristics.
+#
+# The pip-installed `yt_dlp` module is imported lazily only as a last-resort
+# fallback for environments that have no exe on disk.
 
 
 _YT_HOST_RE = re.compile(
@@ -32,17 +37,46 @@ _PROGRESS_RE = re.compile(
 _DEST_RE = re.compile(r"\[(?:download|Merger|ExtractAudio)\]\s+(?:Destination|Merging formats into):?\s+\"?(?P<path>.+?)\"?$")
 
 
-def _make_probe_opts() -> dict[str, Any]:
+async def _probe_via_exe(url: str) -> dict[str, Any]:
+    """Ask yt-dlp.exe for metadata as JSON. Preferred path — the bundled
+    JS runtime handles YouTube's current n-challenge / bot check better
+    than the pip package."""
+    ytdlp = config.ytdlp_path
+    if not Path(ytdlp).exists():
+        raise FileNotFoundError(ytdlp)
+    args = [
+        ytdlp, url,
+        "--dump-single-json", "--no-download", "--no-warnings", "--no-playlist",
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0 or not stdout:
+        err = stderr.decode("utf-8", errors="replace").strip() or "yt-dlp.exe returned no output"
+        # Strip ANSI colour codes yt-dlp emits on some terminals
+        err = re.sub(r"\x1b\[[0-9;]*m", "", err)
+        raise RuntimeError(err[-400:])
+    return json.loads(stdout.decode("utf-8", errors="replace"))
+
+
+async def _probe_via_pip(url: str) -> dict[str, Any]:
+    """Last-resort fallback for environments without yt-dlp.exe on disk."""
+    import yt_dlp  # noqa: PLC0415 — imported lazily; may not be installed
     opts: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-        "skip_download": True,
+        "quiet": True, "no_warnings": True, "noprogress": True, "skip_download": True,
     }
     ff_dir = Path(config.ffmpeg_path).parent
     if ff_dir.exists():
         opts["ffmpeg_location"] = str(ff_dir)
-    return opts
+
+    def _run() -> dict[str, Any]:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
+
+    return await asyncio.to_thread(_run)
 
 
 @register
@@ -54,11 +88,13 @@ class YouTubeDownloader(BaseDownloader):
         return bool(_YT_HOST_RE.match(url))
 
     async def probe(self, url: str, *, referer: Optional[str] = None) -> InspectResult:
-        def _run() -> dict[str, Any]:
-            with yt_dlp.YoutubeDL(_make_probe_opts()) as ydl:
-                return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
-
-        info = await asyncio.to_thread(_run)
+        # Prefer the exe. Only fall back to the pip package when the exe is
+        # genuinely absent — never on YouTube errors, since the pip package
+        # tends to be strictly less capable than the exe on those.
+        try:
+            info = await _probe_via_exe(url)
+        except FileNotFoundError:
+            info = await _probe_via_pip(url)
 
         if info.get("_type") == "playlist" and info.get("entries"):
             entries = [e for e in info["entries"] if e]
