@@ -214,10 +214,12 @@ function renderInspection(data) {
     sniffInfoEl.classList.add("hidden");
   }
 
-  // Reset filename input — user can override the derived title
+  // Reset filename input — user can override the derived title.
+  // Keep the "no extension" hint from the base HTML placeholder even when
+  // we augment it with the derived title as a preview.
   $("filename-input").value = "";
   $("filename-input").placeholder =
-    `留空则用 "${(data.title || "video").slice(0, 40)}"`;
+    `不含扩展名；留空则用 "${(data.title || "video").slice(0, 40)}"`;
 }
 
 // ===== Download =====
@@ -271,6 +273,9 @@ $("direct-m3u8-btn").addEventListener("click", async () => {
         url,
         format_id: fid,
         downloader: "m3u8",
+        // Send `title` too — the backend job list surfaces `request.title`
+        // as the display label, so leaving it blank shows the raw URL.
+        title,
         filename_override: title,
         save_dir: saveDir,
         headers,
@@ -565,7 +570,10 @@ async function runYtdlpUpdate() {
   } catch (e) {
     logEl.textContent = "× " + e.message;
     btn.textContent = "更新失败";
-    setTimeout(() => { btn.textContent = origLabel; }, 3000);
+    // Was `origLabel` — a leftover from an earlier revision where the label
+    // was captured per-call. That variable no longer exists, so the reset
+    // now uses the shared constant to match the sibling branches above.
+    setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
   } finally {
     btn.disabled = false;
   }

@@ -36,6 +36,12 @@ async def _run(cmd: list[str], timeout: float = 8.0) -> tuple[int, str, str]:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
+        # Await the actual termination — otherwise repeated timeouts can
+        # accumulate zombie processes and leave pipes un-drained.
+        try:
+            await proc.wait()
+        except Exception:
+            pass
         return -1, "", "timeout"
     return (
         proc.returncode or 0,
@@ -52,9 +58,11 @@ def _age_days_from_ymd(y: int, m: int, d: int) -> Optional[int]:
 
 
 async def _ytdlp_info() -> dict[str, Any]:
+    import shutil
     path = config.ytdlp_path
-    exists = Path(path).is_file() or Path(path).name == path  # allow PATH lookup
-    if not exists:
+    # shutil.which resolves both absolute paths and PATH-based bare names,
+    # returning None if neither actually exists.
+    if shutil.which(path) is None:
         return {"path": path, "available": False}
     rc, out, err = await _run([path, "--version"], timeout=8.0)
     version = out.strip().splitlines()[0].strip() if out.strip() else None
@@ -73,8 +81,9 @@ async def _ytdlp_info() -> dict[str, Any]:
 
 
 async def _m3u8dl_info() -> dict[str, Any]:
+    import shutil
     path = config.m3u8dl_path
-    if not Path(path).is_file() and Path(path).name != path:
+    if shutil.which(path) is None:
         return {"path": path, "available": False}
     # N_m3u8DL-RE has no `--version`; the header line on --help contains it.
     rc, out, err = await _run([path, "--help"], timeout=8.0)
@@ -97,8 +106,9 @@ async def _m3u8dl_info() -> dict[str, Any]:
 
 
 async def _ffmpeg_info() -> dict[str, Any]:
+    import shutil
     path = config.ffmpeg_path
-    if not Path(path).is_file() and Path(path).name != path:
+    if shutil.which(path) is None:
         return {"path": path, "available": False}
     rc, out, err = await _run([path, "-version"], timeout=8.0)
     combined = out + err
@@ -128,8 +138,11 @@ _PERMISSION_ERROR_RE = re.compile(
 
 async def update_ytdlp() -> dict[str, Any]:
     """Run `yt-dlp.exe -U`. Returns combined stdout/stderr and new version."""
+    import shutil
     path = config.ytdlp_path
-    if not Path(path).is_file():
+    # Accept both absolute paths and bare command names (PATH lookup) —
+    # consistent with _ytdlp_info above.
+    if shutil.which(path) is None:
         return {"ok": False, "error": f"yt-dlp not found at {path}", "log": ""}
     rc, out, err = await _run([path, "-U", "--no-colors"], timeout=60.0)
     log = (out + err).strip()

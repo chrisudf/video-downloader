@@ -41,8 +41,12 @@ async def _probe_via_exe(url: str) -> dict[str, Any]:
     """Ask yt-dlp.exe for metadata as JSON. Preferred path — the bundled
     JS runtime handles YouTube's current n-challenge / bot check better
     than the pip package."""
+    import shutil
     ytdlp = config.ytdlp_path
-    if not Path(ytdlp).exists():
+    # shutil.which handles both absolute paths and bare command names that
+    # resolve via PATH. Path().exists() would falsely reject a bare "yt-dlp"
+    # even when the exe is available on PATH.
+    if shutil.which(ytdlp) is None:
         raise FileNotFoundError(ytdlp)
     args = [
         ytdlp, url,
