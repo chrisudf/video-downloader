@@ -95,6 +95,17 @@ class YouTubeDownloader(BaseDownloader):
             info = await _probe_via_exe(url)
         except FileNotFoundError:
             info = await _probe_via_pip(url)
+        except Exception as e:  # noqa: BLE001
+            # Append a "your yt-dlp is stale, hit Update in Settings" hint if
+            # the exe is older than 30 days — most YouTube-side breakages are
+            # fixed within days of yt-dlp release, so a stale exe is the #1
+            # cause of these errors.
+            from .. import tools
+            info_v = await tools._ytdlp_info()
+            hint = tools.stale_hint(info_v.get("age_days"))
+            if hint:
+                raise RuntimeError(f"{e}\n\n💡 {hint}")
+            raise
 
         if info.get("_type") == "playlist" and info.get("entries"):
             entries = [e for e in info["entries"] if e]
@@ -236,8 +247,15 @@ class YouTubeDownloader(BaseDownloader):
             raise asyncio.CancelledError("cancelled")
         if rc != 0:
             tail = " | ".join(log_tail[-5:])
-            await on_progress(ProgressEvent(status="error", message=f"exit {rc}: {tail}"))
-            raise RuntimeError(f"yt-dlp exited {rc}: {tail}")
+            # Stale yt-dlp is the most common root cause of download failures too.
+            from .. import tools
+            info_v = await tools._ytdlp_info()
+            hint = tools.stale_hint(info_v.get("age_days"))
+            msg = f"exit {rc}: {tail}"
+            if hint:
+                msg += f"\n\n💡 {hint}"
+            await on_progress(ProgressEvent(status="error", message=msg))
+            raise RuntimeError(f"yt-dlp exited {rc}: {tail}" + (f"\n\n💡 {hint}" if hint else ""))
 
         # Best-effort: locate the produced file. The Merger line is most reliable.
         # Fall back to the most recently modified file in save_dir.

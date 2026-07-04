@@ -108,6 +108,18 @@
       <label>N_m3u8DL-RE 路径 <input name="m3u8dl_path" type="text" /></label>
       <label>ffmpeg 路径 <input name="ffmpeg_path" type="text" /></label>
       <label>同时下载数 <input name="max_concurrent_downloads" type="number" min="1" max="10" /></label>
+
+      <fieldset class="tool-versions">
+        <legend>工具版本</legend>
+        <div id="tool-versions-list" class="muted small">加载中…</div>
+        <div class="tool-actions">
+          <button type="button" id="update-ytdlp-btn">更新 yt-dlp</button>
+          <button type="button" id="refresh-versions-btn" class="link small">刷新</button>
+        </div>
+        <pre id="update-log" class="hidden"></pre>
+        <div id="relocate-hint" class="hidden" style="margin-top:8px"></div>
+      </fieldset>
+
       <div class="dialog-actions">
         <button type="button" id="settings-cancel">取消</button>
         <button type="submit" class="primary">保存</button>

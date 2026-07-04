@@ -47,6 +47,11 @@ header h1 {
   height: 36px;
   cursor: pointer;
   font-size: 18px;
+  padding: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 #settings-btn:hover { background: var(--panel-2); }
 
@@ -212,6 +217,37 @@ button.danger {
   margin-top: 10px;
 }
 button.small, .link.small { font-size: 12px; padding: 2px 6px; }
+
+.tool-versions {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 12px 0;
+}
+.tool-versions legend { padding: 0 6px; font-size: 12px; color: var(--muted); }
+#tool-versions-list {
+  font-family: "Cascadia Code", Consolas, monospace;
+  line-height: 1.5;
+}
+.tool-line { display: flex; justify-content: space-between; gap: 8px; }
+.tool-name { color: var(--text); }
+.tool-age-fresh { color: var(--ok); }
+.tool-age-stale { color: var(--warn); }
+.tool-age-verystale { color: var(--err); }
+.tool-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+#update-log {
+  margin-top: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 #jobs-list {
   list-style: none;

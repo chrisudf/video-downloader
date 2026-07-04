@@ -436,9 +436,142 @@ $("settings-btn").addEventListener("click", async () => {
   }
   saveDirInput.value = cfg.save_dir || "";
   settingsDialog.showModal();
+  loadToolVersions();
 });
 
 $("settings-cancel").addEventListener("click", () => settingsDialog.close());
+
+// ===== Tool versions =====
+let lastToolVersions = null;
+
+async function loadToolVersions() {
+  const el = $("tool-versions-list");
+  el.textContent = "加载中…";
+  try {
+    const v = await api("/api/tools/versions");
+    lastToolVersions = v;
+    renderToolVersions(v);
+  } catch (e) {
+    el.textContent = "× " + e.message;
+  }
+}
+
+function ageClass(days) {
+  if (days == null) return "";
+  if (days > 60) return "tool-age-verystale";
+  if (days > 30) return "tool-age-stale";
+  return "tool-age-fresh";
+}
+
+function renderToolVersions(v) {
+  const el = $("tool-versions-list");
+  el.innerHTML = "";
+  const rows = [
+    { key: "ytdlp",  label: "yt-dlp" },
+    { key: "m3u8dl", label: "N_m3u8DL-RE" },
+    { key: "ffmpeg", label: "ffmpeg" },
+  ];
+  for (const row of rows) {
+    const info = v[row.key];
+    if (!info) continue;
+    const div = document.createElement("div");
+    div.className = "tool-line";
+    const name = document.createElement("span");
+    name.className = "tool-name";
+    name.textContent = row.label;
+    const right = document.createElement("span");
+    if (!info.available) {
+      right.textContent = "× 找不到 (" + info.path + ")";
+      right.className = "tool-age-verystale";
+    } else {
+      let text = info.version || "未知";
+      if (info.age_days != null) text += ` · ${info.age_days} 天前`;
+      right.textContent = text;
+      right.className = ageClass(info.age_days);
+    }
+    div.append(name, right);
+    el.append(div);
+  }
+}
+
+$("refresh-versions-btn").addEventListener("click", loadToolVersions);
+
+const UPDATE_BTN_LABEL = "更新 yt-dlp";
+
+async function runYtdlpUpdate() {
+  const btn = $("update-ytdlp-btn");
+  const logEl = $("update-log");
+  const fixEl = $("relocate-hint");
+  btn.disabled = true;
+  btn.textContent = "更新中…";
+  logEl.classList.remove("hidden");
+  logEl.textContent = "运行 yt-dlp -U，请稍候（可能几十秒）…";
+  fixEl.classList.add("hidden");
+  try {
+    const r = await api("/api/tools/update_ytdlp", { method: "POST" });
+    logEl.textContent = r.log || "(无输出)";
+    if (r.ok) {
+      const after = r.version_after ? ` → ${r.version_after}` : "";
+      btn.textContent = "更新完成 ✓" + after;
+      setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
+      await loadToolVersions();
+    } else if (r.permission_error) {
+      // Show relocation offer
+      btn.textContent = "更新失败（权限不足）";
+      const target = r.suggested_relocation || "用户可写目录";
+      fixEl.classList.remove("hidden");
+      fixEl.innerHTML = "";
+      const msg = document.createElement("div");
+      msg.className = "muted small";
+      const currentPath = (lastToolVersions && lastToolVersions.ytdlp && lastToolVersions.ytdlp.path) || "当前路径";
+      msg.textContent = `写不进 ${currentPath} — 通常是因为它在需要管理员权限的目录（比如 C:\\ 根目录）。挪到用户目录就能自动更新：`;
+      const dest = document.createElement("code");
+      dest.textContent = target;
+      dest.style.cssText = "display:block;margin:4px 0;padding:4px 6px;background:var(--panel);border-radius:3px;font-size:11px;word-break:break-all";
+      const relocateBtn = document.createElement("button");
+      relocateBtn.type = "button";
+      relocateBtn.textContent = "移到用户目录并重试更新";
+      relocateBtn.className = "primary";
+      relocateBtn.style.marginTop = "6px";
+      relocateBtn.addEventListener("click", async () => {
+        relocateBtn.disabled = true;
+        relocateBtn.textContent = "移动中…";
+        try {
+          const mv = await api("/api/tools/relocate_ytdlp", { method: "POST", body: JSON.stringify({}) });
+          if (!mv.ok) {
+            logEl.textContent = "× 移动失败: " + (mv.error || "unknown");
+            relocateBtn.textContent = "移动失败";
+            return;
+          }
+          logEl.textContent = `已复制到 ${mv.destination}\n(原文件 ${mv.source} 仍保留)\n\n准备重新更新…`;
+          // Sync the settings form field so a subsequent "Save" doesn't clobber
+          // the new path with the old cached value.
+          const pathInput = settingsForm.elements.namedItem("ytdlp_path");
+          if (pathInput) pathInput.value = mv.destination;
+          fixEl.classList.add("hidden");
+          setTimeout(runYtdlpUpdate, 500);
+        } catch (e) {
+          logEl.textContent = "× " + e.message;
+          relocateBtn.textContent = "移动失败";
+        } finally {
+          relocateBtn.disabled = false;
+        }
+      });
+      fixEl.append(msg, dest, relocateBtn);
+    } else {
+      btn.textContent = "更新失败";
+      setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
+    }
+  } catch (e) {
+    logEl.textContent = "× " + e.message;
+    btn.textContent = "更新失败";
+    setTimeout(() => { btn.textContent = origLabel; }, 3000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("update-ytdlp-btn").addEventListener("click", runYtdlpUpdate);
 
 settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
