@@ -63,11 +63,29 @@
       </div>
     </div>
 
+    <div id="sniff-source-info" class="hidden">
+      <div class="sniff-source-head">
+        <span class="muted small" id="sniff-source-label">从浏览器抓到的 m3u8:</span>
+        <button type="button" id="sniff-copy" class="link small">复制</button>
+      </div>
+      <div class="sniff-source-body">
+        <select id="sniff-source"></select>
+        <a id="sniff-open-external" class="muted small" target="_blank" rel="noopener">
+          在新标签打开 ↗
+        </a>
+      </div>
+    </div>
+
     <div class="formats">
       <label for="format-select">清晰度</label>
       <select id="format-select"></select>
       <input id="save-dir-input" type="text" placeholder="保存目录" />
       <button id="download-btn" class="primary">Download</button>
+    </div>
+
+    <div class="filename-row">
+      <label for="filename-input" class="muted small">文件名</label>
+      <input id="filename-input" type="text" placeholder="留空则用视频标题；不含扩展名" />
     </div>
   </section>
 
@@ -90,6 +108,18 @@
       <label>N_m3u8DL-RE 路径 <input name="m3u8dl_path" type="text" /></label>
       <label>ffmpeg 路径 <input name="ffmpeg_path" type="text" /></label>
       <label>同时下载数 <input name="max_concurrent_downloads" type="number" min="1" max="10" /></label>
+
+      <fieldset class="tool-versions">
+        <legend>工具版本</legend>
+        <div id="tool-versions-list" class="muted small">加载中…</div>
+        <div class="tool-actions">
+          <button type="button" id="update-ytdlp-btn">更新 yt-dlp</button>
+          <button type="button" id="refresh-versions-btn" class="link small">刷新</button>
+        </div>
+        <pre id="update-log" class="hidden"></pre>
+        <div id="relocate-hint" class="hidden" style="margin-top:8px"></div>
+      </fieldset>
+
       <div class="dialog-actions">
         <button type="button" id="settings-cancel">取消</button>
         <button type="submit" class="primary">保存</button>

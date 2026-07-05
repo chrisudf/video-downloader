@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import tools
 from .browser_sniff import is_available as sniff_available, sniff
 from .config import config
 from .detector import pick_downloader, list_downloaders
@@ -38,6 +39,22 @@ def update_config(patch: dict[str, Any]) -> dict[str, Any]:
 @app.get("/api/downloaders")
 def get_downloaders() -> list[str]:
     return list_downloaders()
+
+
+@app.get("/api/tools/versions")
+async def tool_versions() -> dict[str, Any]:
+    return await tools.all_versions()
+
+
+@app.post("/api/tools/update_ytdlp")
+async def update_ytdlp() -> dict[str, Any]:
+    return await tools.update_ytdlp()
+
+
+@app.post("/api/tools/relocate_ytdlp")
+async def relocate_ytdlp(payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    dest = (payload or {}).get("destination")
+    return await tools.relocate_ytdlp(destination=dest)
 
 
 @app.post("/api/inspect", response_model=InspectResult)

@@ -87,19 +87,11 @@ sniffBtn.addEventListener("click", async () => {
       inspectStatus.className = "status error";
       return;
     }
-    // Pick the first media URL — usually the master playlist
-    const first = data.media[0];
-    inspectStatus.textContent = `抓到 ${data.media.length} 个 m3u8，正在解析变体…`;
-    const probe = await api("/api/inspect", {
-      method: "POST",
-      body: JSON.stringify({
-        url: first.url,
-        referer: first.referer || url,
-      }),
-    });
-    currentInspection = probe;
-    renderInspection(probe);
-    inspectStatus.textContent = `✓ 从浏览器抓到 ${probe.formats.length} 个格式`;
+    // Preserve all captured URLs so the user can switch source if the first isn't the right one.
+    await probeSniffedSource(data.media[0], data.media, url);
+    inspectStatus.textContent = data.media.length > 1
+      ? `✓ 抓到 ${data.media.length} 个 m3u8（默认用第一个，可下方切换）`
+      : `✓ 从浏览器抓到 m3u8`;
     inspectStatus.className = "status ok";
     sniffActions.classList.add("hidden");
   } catch (e) {
@@ -110,8 +102,59 @@ sniffBtn.addEventListener("click", async () => {
   }
 });
 
+async function probeSniffedSource(chosen, allCandidates, originalPageUrl) {
+  const probe = await api("/api/inspect", {
+    method: "POST",
+    body: JSON.stringify({
+      url: chosen.url,
+      referer: chosen.referer || originalPageUrl,
+    }),
+  });
+  probe.sniff_candidates = allCandidates;
+  probe.sniff_page_url = originalPageUrl;
+  probe.sniff_selected_index = allCandidates.findIndex(c => c.url === chosen.url);
+  currentInspection = probe;
+  renderInspection(probe);
+}
+
+const sniffSourceSelect = $("sniff-source");
+
+sniffSourceSelect.addEventListener("change", async () => {
+  if (!currentInspection || !currentInspection.sniff_candidates) return;
+  const idx = parseInt(sniffSourceSelect.value, 10);
+  const cand = currentInspection.sniff_candidates[idx];
+  if (!cand) return;
+  $("sniff-open-external").href = cand.url;
+  inspectStatus.textContent = "切换源，正在重新解析…";
+  inspectStatus.className = "status";
+  try {
+    await probeSniffedSource(cand, currentInspection.sniff_candidates, currentInspection.sniff_page_url);
+    inspectStatus.textContent = "✓ 已切换";
+    inspectStatus.className = "status ok";
+  } catch (e) {
+    inspectStatus.textContent = `× 切换失败: ${e.message}`;
+    inspectStatus.className = "status error";
+  }
+});
+
 urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") inspectBtn.click();
+});
+
+$("sniff-copy").addEventListener("click", async () => {
+  if (!currentInspection || !currentInspection.sniff_candidates) return;
+  const idx = parseInt(sniffSourceSelect.value, 10) || 0;
+  const cand = currentInspection.sniff_candidates[idx];
+  if (!cand) return;
+  try {
+    await navigator.clipboard.writeText(cand.url);
+    const btn = $("sniff-copy");
+    const orig = btn.textContent;
+    btn.textContent = "已复制 ✓";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (e) {
+    alert("复制失败：" + e.message + "\n\n" + cand.url);
+  }
 });
 
 function renderInspection(data) {
@@ -139,6 +182,44 @@ function renderInspection(data) {
     opt.textContent = label;
     formatSelect.appendChild(opt);
   }
+
+  // Show the sniffed m3u8 URL(s) whenever the source came from browser sniff,
+  // even if only one was captured — so the user can see & verify it.
+  const cands = data.sniff_candidates || [];
+  const sniffInfoEl = $("sniff-source-info");
+  if (cands.length >= 1) {
+    sniffInfoEl.classList.remove("hidden");
+    sniffSourceSelect.innerHTML = "";
+    cands.forEach((c, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      const u = new URL(c.url);
+      const tail = u.pathname.split("/").pop() || u.pathname;
+      opt.textContent = cands.length > 1
+        ? `[${i + 1}] ${u.host}  …/${truncate(tail, 44)}`
+        : `${u.host}  …/${truncate(tail, 60)}`;
+      opt.title = c.url;   // hover shows full URL
+      sniffSourceSelect.appendChild(opt);
+    });
+    sniffSourceSelect.value = String(data.sniff_selected_index ?? 0);
+    // Adjust label wording based on count
+    $("sniff-source-label").textContent = cands.length > 1
+      ? `从浏览器抓到 ${cands.length} 个 m3u8，可切换：`
+      : "从浏览器抓到的 m3u8:";
+    // Single-URL select loses "click to open" affordance; disable interaction if only 1
+    sniffSourceSelect.disabled = (cands.length <= 1);
+    // Wire the external-open link to the currently selected URL
+    $("sniff-open-external").href = cands[data.sniff_selected_index ?? 0].url;
+  } else {
+    sniffInfoEl.classList.add("hidden");
+  }
+
+  // Reset filename input — user can override the derived title.
+  // Keep the "no extension" hint from the base HTML placeholder even when
+  // we augment it with the derived title as a preview.
+  $("filename-input").value = "";
+  $("filename-input").placeholder =
+    `不含扩展名；留空则用 "${(data.title || "video").slice(0, 40)}"`;
 }
 
 // ===== Download =====
@@ -148,6 +229,7 @@ downloadBtn.addEventListener("click", async () => {
   const data = currentInspection;
   downloadBtn.disabled = true;
   try {
+    const customName = $("filename-input").value.trim();
     const job = await api("/api/download", {
       method: "POST",
       body: JSON.stringify({
@@ -155,6 +237,7 @@ downloadBtn.addEventListener("click", async () => {
         format_id: fid,
         downloader: data.downloader,
         title: data.title,
+        filename_override: customName || null,
         save_dir: saveDirInput.value.trim() || null,
         headers: data.headers || {},
       }),
@@ -190,7 +273,10 @@ $("direct-m3u8-btn").addEventListener("click", async () => {
         url,
         format_id: fid,
         downloader: "m3u8",
+        // Send `title` too — the backend job list surfaces `request.title`
+        // as the display label, so leaving it blank shows the raw URL.
         title,
+        filename_override: title,
         save_dir: saveDir,
         headers,
       }),
@@ -355,9 +441,145 @@ $("settings-btn").addEventListener("click", async () => {
   }
   saveDirInput.value = cfg.save_dir || "";
   settingsDialog.showModal();
+  loadToolVersions();
 });
 
 $("settings-cancel").addEventListener("click", () => settingsDialog.close());
+
+// ===== Tool versions =====
+let lastToolVersions = null;
+
+async function loadToolVersions() {
+  const el = $("tool-versions-list");
+  el.textContent = "加载中…";
+  try {
+    const v = await api("/api/tools/versions");
+    lastToolVersions = v;
+    renderToolVersions(v);
+  } catch (e) {
+    el.textContent = "× " + e.message;
+  }
+}
+
+function ageClass(days) {
+  if (days == null) return "";
+  if (days > 60) return "tool-age-verystale";
+  if (days > 30) return "tool-age-stale";
+  return "tool-age-fresh";
+}
+
+function renderToolVersions(v) {
+  const el = $("tool-versions-list");
+  el.innerHTML = "";
+  const rows = [
+    { key: "ytdlp",  label: "yt-dlp" },
+    { key: "m3u8dl", label: "N_m3u8DL-RE" },
+    { key: "ffmpeg", label: "ffmpeg" },
+  ];
+  for (const row of rows) {
+    const info = v[row.key];
+    if (!info) continue;
+    const div = document.createElement("div");
+    div.className = "tool-line";
+    const name = document.createElement("span");
+    name.className = "tool-name";
+    name.textContent = row.label;
+    const right = document.createElement("span");
+    if (!info.available) {
+      right.textContent = "× 找不到 (" + info.path + ")";
+      right.className = "tool-age-verystale";
+    } else {
+      let text = info.version || "未知";
+      if (info.age_days != null) text += ` · ${info.age_days} 天前`;
+      right.textContent = text;
+      right.className = ageClass(info.age_days);
+    }
+    div.append(name, right);
+    el.append(div);
+  }
+}
+
+$("refresh-versions-btn").addEventListener("click", loadToolVersions);
+
+const UPDATE_BTN_LABEL = "更新 yt-dlp";
+
+async function runYtdlpUpdate() {
+  const btn = $("update-ytdlp-btn");
+  const logEl = $("update-log");
+  const fixEl = $("relocate-hint");
+  btn.disabled = true;
+  btn.textContent = "更新中…";
+  logEl.classList.remove("hidden");
+  logEl.textContent = "运行 yt-dlp -U，请稍候（可能几十秒）…";
+  fixEl.classList.add("hidden");
+  try {
+    const r = await api("/api/tools/update_ytdlp", { method: "POST" });
+    logEl.textContent = r.log || "(无输出)";
+    if (r.ok) {
+      const after = r.version_after ? ` → ${r.version_after}` : "";
+      btn.textContent = "更新完成 ✓" + after;
+      setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
+      await loadToolVersions();
+    } else if (r.permission_error) {
+      // Show relocation offer
+      btn.textContent = "更新失败（权限不足）";
+      const target = r.suggested_relocation || "用户可写目录";
+      fixEl.classList.remove("hidden");
+      fixEl.innerHTML = "";
+      const msg = document.createElement("div");
+      msg.className = "muted small";
+      const currentPath = (lastToolVersions && lastToolVersions.ytdlp && lastToolVersions.ytdlp.path) || "当前路径";
+      msg.textContent = `写不进 ${currentPath} — 通常是因为它在需要管理员权限的目录（比如 C:\\ 根目录）。挪到用户目录就能自动更新：`;
+      const dest = document.createElement("code");
+      dest.textContent = target;
+      dest.style.cssText = "display:block;margin:4px 0;padding:4px 6px;background:var(--panel);border-radius:3px;font-size:11px;word-break:break-all";
+      const relocateBtn = document.createElement("button");
+      relocateBtn.type = "button";
+      relocateBtn.textContent = "移到用户目录并重试更新";
+      relocateBtn.className = "primary";
+      relocateBtn.style.marginTop = "6px";
+      relocateBtn.addEventListener("click", async () => {
+        relocateBtn.disabled = true;
+        relocateBtn.textContent = "移动中…";
+        try {
+          const mv = await api("/api/tools/relocate_ytdlp", { method: "POST", body: JSON.stringify({}) });
+          if (!mv.ok) {
+            logEl.textContent = "× 移动失败: " + (mv.error || "unknown");
+            relocateBtn.textContent = "移动失败";
+            return;
+          }
+          logEl.textContent = `已复制到 ${mv.destination}\n(原文件 ${mv.source} 仍保留)\n\n准备重新更新…`;
+          // Sync the settings form field so a subsequent "Save" doesn't clobber
+          // the new path with the old cached value.
+          const pathInput = settingsForm.elements.namedItem("ytdlp_path");
+          if (pathInput) pathInput.value = mv.destination;
+          fixEl.classList.add("hidden");
+          setTimeout(runYtdlpUpdate, 500);
+        } catch (e) {
+          logEl.textContent = "× " + e.message;
+          relocateBtn.textContent = "移动失败";
+        } finally {
+          relocateBtn.disabled = false;
+        }
+      });
+      fixEl.append(msg, dest, relocateBtn);
+    } else {
+      btn.textContent = "更新失败";
+      setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
+    }
+  } catch (e) {
+    logEl.textContent = "× " + e.message;
+    btn.textContent = "更新失败";
+    // Was `origLabel` — a leftover from an earlier revision where the label
+    // was captured per-call. That variable no longer exists, so the reset
+    // now uses the shared constant to match the sibling branches above.
+    setTimeout(() => { btn.textContent = UPDATE_BTN_LABEL; }, 3000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("update-ytdlp-btn").addEventListener("click", runYtdlpUpdate);
 
 settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
