@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from .. import tools
 from ..config import config
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
@@ -188,7 +190,9 @@ class M3U8Downloader(BaseDownloader):
         save_dir.mkdir(parents=True, exist_ok=True)
 
         m3u8_path = config.m3u8dl_path
-        if not Path(m3u8_path).exists():
+        # shutil.which accepts bare PATH-resolved names too — Path().exists()
+        # falsely rejects the default config value "N_m3u8DL-RE".
+        if shutil.which(m3u8_path) is None:
             raise FileNotFoundError(f"N_m3u8DL-RE not found at {m3u8_path}. Check config.json")
 
         base = (request.filename_override or request.title or "video").strip()
@@ -199,24 +203,31 @@ class M3U8Downloader(BaseDownloader):
             request.url,
             "--save-name", safe_title,
             "--save-dir", str(save_dir),
-            "--auto-select",
             "--check-segments-count", "False",
         ]
 
-        # Apply quality selector
-        fid = request.format_id
-        if fid and fid != "best":
-            if fid.startswith("res="):
-                args += ["--select-video", fid]
-            elif fid.startswith("bw="):
-                args += ["--select-video", fid]
-            else:
-                args += ["--select-video", fid]
+        # Quality selector. Probe ids are "res=WxH" (variants carrying a
+        # RESOLUTION attribute) or "bw=..." (variants without one).
+        # N_m3u8DL-RE's filter keys are regex-valued (res=, codecs=, ...) and
+        # bandwidth is not among them, so "bw=..." was never a valid filter.
+        # Exact-match the resolution when we have one; otherwise fall back to
+        # auto-selecting the best stream. --auto-select and an explicit
+        # selection are mutually exclusive here so they can't disagree.
+        fid = request.format_id or "best"
+        if fid.startswith("res=") and fid != "res=":
+            res = fid[len("res="):]
+            args += [
+                "--select-video", f"res=^{re.escape(res)}$:for=best",
+                "--select-audio", "best",
+            ]
+        else:
+            args += ["--auto-select"]
 
-        # ffmpeg location (for muxing)
-        ff_dir = Path(config.ffmpeg_path).parent
-        if ff_dir.exists():
-            args += ["--ffmpeg-binary-path", config.ffmpeg_path]
+        # ffmpeg location (for muxing). Resolve via PATH — the raw config
+        # value may be a bare "ffmpeg", whose .parent "." would be wrong.
+        ff = tools.resolve_ffmpeg()
+        if ff:
+            args += ["--ffmpeg-binary-path", ff]
 
         # Headers — combine Referer/UA + any extra
         merged_headers = dict(request.headers)

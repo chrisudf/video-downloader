@@ -105,6 +105,16 @@ async def _m3u8dl_info() -> dict[str, Any]:
     }
 
 
+def resolve_ffmpeg() -> Optional[str]:
+    """Absolute path to the ffmpeg binary, or None if it can't be found.
+    Accepts both explicit paths and bare command names resolved via PATH.
+    Callers must not derive a directory from the raw config value —
+    Path("ffmpeg").parent is "." which always exists, silently pointing
+    downstream tools at the current working directory instead of ffmpeg."""
+    import shutil
+    return shutil.which(config.ffmpeg_path)
+
+
 async def _ffmpeg_info() -> dict[str, Any]:
     import shutil
     path = config.ffmpeg_path
