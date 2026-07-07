@@ -4,16 +4,16 @@ import asyncio
 import webbrowser
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import tools
 from .browser_sniff import is_available as sniff_available, sniff
 from .config import config
 from .detector import pick_downloader, list_downloaders
-from .downloaders.registry import get_downloader
 from .downloads_manager import manager
 from .models import DownloadRequest, InspectRequest, InspectResult, JobStatus
 
@@ -21,6 +21,34 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 app = FastAPI(title="Video Downloader", version="0.1.0")
+
+
+# ---- Local-only request guard ----------------------------------------
+# This server executes user-configurable binaries (yt-dlp, N_m3u8DL-RE) and
+# lets /api/config repoint those paths, so a web page must never be able to
+# reach it cross-site. Reject any request whose Host header isn't loopback
+# (DNS rebinding) or whose Origin is another site (CSRF).
+
+_LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_local(netloc_or_origin: str) -> bool:
+    value = netloc_or_origin if "//" in netloc_or_origin else f"//{netloc_or_origin}"
+    try:
+        host = urlparse(value).hostname
+    except ValueError:
+        return False
+    return host in _LOCAL_HOSTNAMES
+
+
+@app.middleware("http")
+async def _reject_cross_site(request: Request, call_next):  # type: ignore[no-untyped-def]
+    if not _is_local(request.headers.get("host", "")):
+        return JSONResponse({"detail": "forbidden Host header"}, status_code=403)
+    origin = request.headers.get("origin")
+    if origin and not _is_local(origin):
+        return JSONResponse({"detail": "cross-origin requests are not allowed"}, status_code=403)
+    return await call_next(request)
 
 
 # ---- API -------------------------------------------------------------
@@ -183,7 +211,12 @@ async def reveal_job(job_id: str) -> dict[str, Any]:
         else:
             subprocess.Popen(["explorer", target_path])
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R" if Path(target_path).is_file() else "", target_path])
+        # `open` treats an empty-string argument as a (missing) file, so the
+        # -R flag must be present-or-absent, never "".
+        if Path(target_path).is_file():
+            subprocess.Popen(["open", "-R", target_path])
+        else:
+            subprocess.Popen(["open", target_path])
     else:
         subprocess.Popen(["xdg-open", str(Path(target_path).parent if Path(target_path).is_file() else target_path)])
     return {"opened": target_path}
@@ -191,6 +224,12 @@ async def reveal_job(job_id: str) -> dict[str, Any]:
 
 @app.websocket("/ws/progress/{job_id}")
 async def ws_progress(ws: WebSocket, job_id: str) -> None:
+    # WebSockets bypass CORS entirely — apply the same origin policy as the
+    # HTTP middleware above.
+    origin = ws.headers.get("origin")
+    if origin and not _is_local(origin):
+        await ws.close(code=4403)
+        return
     job = manager.get(job_id)
     if not job:
         await ws.close(code=4004)

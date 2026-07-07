@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import tools
 from ..config import config
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
@@ -41,7 +43,6 @@ async def _probe_via_exe(url: str) -> dict[str, Any]:
     """Ask yt-dlp.exe for metadata as JSON. Preferred path — the bundled
     JS runtime handles YouTube's current n-challenge / bot check better
     than the pip package."""
-    import shutil
     ytdlp = config.ytdlp_path
     # shutil.which handles both absolute paths and bare command names that
     # resolve via PATH. Path().exists() would falsely reject a bare "yt-dlp"
@@ -72,9 +73,9 @@ async def _probe_via_pip(url: str) -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True, "no_warnings": True, "noprogress": True, "skip_download": True,
     }
-    ff_dir = Path(config.ffmpeg_path).parent
-    if ff_dir.exists():
-        opts["ffmpeg_location"] = str(ff_dir)
+    ff = tools.resolve_ffmpeg()
+    if ff:
+        opts["ffmpeg_location"] = ff
 
     def _run() -> dict[str, Any]:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -104,7 +105,6 @@ class YouTubeDownloader(BaseDownloader):
             # the exe is older than 30 days — most YouTube-side breakages are
             # fixed within days of yt-dlp release, so a stale exe is the #1
             # cause of these errors.
-            from .. import tools
             info_v = await tools._ytdlp_info()
             hint = tools.stale_hint(info_v.get("age_days"))
             if hint:
@@ -158,7 +158,10 @@ class YouTubeDownloader(BaseDownloader):
         save_dir.mkdir(parents=True, exist_ok=True)
 
         ytdlp = config.ytdlp_path
-        if not Path(ytdlp).exists():
+        # Same check as probe: shutil.which accepts bare PATH-resolved names,
+        # which Path().exists() would falsely reject — with the default
+        # config ("yt-dlp" on PATH) probe succeeded but download refused.
+        if shutil.which(ytdlp) is None:
             raise FileNotFoundError(
                 f"yt-dlp not found at {ytdlp}. Set 'ytdlp_path' in config.json."
             )
@@ -182,9 +185,12 @@ class YouTubeDownloader(BaseDownloader):
             "--concurrent-fragments", "4",
             "--retries", "10",
         ]
-        ff_dir = Path(config.ffmpeg_path).parent
-        if ff_dir.exists():
-            args += ["--ffmpeg-location", str(ff_dir)]
+        # --ffmpeg-location accepts either the binary or its directory. Resolve
+        # via PATH — deriving .parent from a bare "ffmpeg" yields "." and
+        # makes yt-dlp look for ffmpeg in the CWD only, breaking merges.
+        ff = tools.resolve_ffmpeg()
+        if ff:
+            args += ["--ffmpeg-location", ff]
 
         # Pass through any user-supplied headers (cookies, custom Referer, ...)
         for k, v in request.headers.items():
@@ -252,7 +258,6 @@ class YouTubeDownloader(BaseDownloader):
         if rc != 0:
             tail = " | ".join(log_tail[-5:])
             # Stale yt-dlp is the most common root cause of download failures too.
-            from .. import tools
             info_v = await tools._ytdlp_info()
             hint = tools.stale_hint(info_v.get("age_days"))
             msg = f"exit {rc}: {tail}"
