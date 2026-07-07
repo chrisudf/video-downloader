@@ -112,7 +112,13 @@ def resolve_ffmpeg() -> Optional[str]:
     Path("ffmpeg").parent is "." which always exists, silently pointing
     downstream tools at the current working directory instead of ffmpeg."""
     import shutil
-    return shutil.which(config.ffmpeg_path)
+    path = config.ffmpeg_path
+    # config.update() doesn't validate types, so /api/config can store None
+    # (or any junk) here — treat that as "not found" rather than letting
+    # shutil.which() raise TypeError.
+    if not isinstance(path, str) or not path:
+        return None
+    return shutil.which(path)
 
 
 async def _ffmpeg_info() -> dict[str, Any]:
