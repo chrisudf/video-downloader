@@ -261,11 +261,22 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
     # Update config
     config.update({"ytdlp_path": str(dest_path)})
+    import sys as _sys
+    note = "Original file left in place. Delete manually if you want."
+    if _sys.platform != "win32":
+        # ~/.local/bin is often not on PATH (especially on macOS); that's
+        # fine for us — config.json stores the absolute path — but worth
+        # saying so the user isn't surprised when `yt-dlp` stops resolving
+        # in their shell.
+        note += (
+            " Note: ~/.local/bin may not be on your PATH; the app is "
+            "unaffected (it uses the absolute path from config.json)."
+        )
     return {
         "ok": True,
         "source": src,
         "destination": str(dest_path),
-        "note": "Original file left in place. Delete manually if you want.",
+        "note": note,
     }
 
 
@@ -276,6 +287,6 @@ def stale_hint(age_days: Optional[int], threshold: int = 30) -> Optional[str]:
     if age_days <= threshold:
         return None
     return (
-        f"Your yt-dlp.exe is {age_days} days old — YouTube ships anti-bot changes "
+        f"Your yt-dlp is {age_days} days old — YouTube ships anti-bot changes "
         f"faster than that. Open Settings ⚙ → click 'Update yt-dlp'."
     )
