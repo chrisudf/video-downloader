@@ -182,6 +182,9 @@ async def _download_latest_ytdlp(dest: Path) -> None:
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.new")
 
     def _fetch() -> None:
+        # dest may be the app-managed install dir, which doesn't exist until
+        # the first fallback download lands there.
+        dest.parent.mkdir(parents=True, exist_ok=True)
         # Sweep temp files a previous hard-killed run may have left behind
         # (normal failures clean up after themselves below). Age-gated so a
         # concurrent update's in-progress temp file is never touched.
@@ -212,7 +215,7 @@ async def _download_latest_ytdlp(dest: Path) -> None:
 
 
 async def update_ytdlp() -> dict[str, Any]:
-    """Run `yt-dlp.exe -U`. Returns combined stdout/stderr and new version.
+    """Run `yt-dlp -U`. Returns combined stdout/stderr and new version.
     If the version check is rate-limited by the GitHub API, falls back to
     downloading the latest release binary directly."""
     import shutil
@@ -225,16 +228,42 @@ async def update_ytdlp() -> dict[str, Any]:
     rc, out, err = await _run([path, "-U", "--no-colors"], timeout=60.0)
     log = (out + err).strip()
     log = re.sub(r"\x1b\[[0-9;]*m", "", log)  # strip ANSI just in case
+    fallback_ok = False
     if rc != 0 and _RATE_LIMIT_RE.search(log):
+        bare = Path(path).name == path
+        if bare:
+            # A bare command name may resolve to a package-manager install
+            # (brew symlink, pipx shim) that a release binary must not
+            # clobber. Install to the app-managed location instead and point
+            # config there — same contract as relocate_ytdlp.
+            dest = Path(_suggest_relocation_dest())
+        else:
+            # Explicit file path: update in place, but follow symlinks so we
+            # rewrite the target file rather than replacing the link itself.
+            dest = Path(resolved).resolve()
         try:
-            await _download_latest_ytdlp(Path(resolved))
-            rc = 0
+            await _download_latest_ytdlp(dest)
+            fallback_ok = True
             log += "\n[fallback] GitHub API rate-limited; downloaded the latest release binary directly instead."
+            if bare:
+                config.update({"ytdlp_path": str(dest)})
+                log += (
+                    f"\n[fallback] '{path}' resolves via PATH (possibly a package-manager "
+                    f"install), so the new binary went to {dest} and config now points "
+                    f"there; {resolved} was left untouched."
+                )
         except Exception as e:  # noqa: BLE001
             log += f"\n[fallback] direct download also failed: {e}"
-    permission_error = rc != 0 and bool(_PERMISSION_ERROR_RE.search(log))
+    permission_error = rc != 0 and not fallback_ok and bool(_PERMISSION_ERROR_RE.search(log))
     # Re-query version after update
     new_info = await _ytdlp_info()
+    if fallback_ok:
+        # -U's exit code only reflects the rate-limited version check; judge
+        # the fallback by whether the re-queried binary actually runs, so a
+        # broken download can't report ok: true.
+        rc = 0 if new_info.get("available") else 1
+        if rc != 0:
+            log += "\n[fallback] downloaded binary is not runnable."
     return {
         "ok": rc == 0,
         "exit_code": rc,
@@ -267,13 +296,17 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
     import shutil
 
     src = config.ytdlp_path
-    if not Path(src).is_file():
+    # Defaults are bare command names ("yt-dlp.exe"/"yt-dlp"), so resolve via
+    # PATH the same way _ytdlp_info/update_ytdlp do — Path("yt-dlp").is_file()
+    # would fail on a typical install.
+    resolved = shutil.which(src)
+    if resolved is None:
         return {"ok": False, "error": f"source not found: {src}"}
     dest = destination or _suggest_relocation_dest()
     dest_path = Path(dest)
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest_path)
+        shutil.copy2(resolved, dest_path)
     except PermissionError as e:
         return {"ok": False, "error": f"cannot write to {dest}: {e}"}
     except Exception as e:  # noqa: BLE001
@@ -293,7 +326,7 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
         )
     return {
         "ok": True,
-        "source": src,
+        "source": resolved,
         "destination": str(dest_path),
         "note": note,
     }
