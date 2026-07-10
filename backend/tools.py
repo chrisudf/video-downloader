@@ -166,30 +166,49 @@ _YTDLP_RELEASE_ASSETS = {
 
 async def _download_latest_ytdlp(dest: Path) -> None:
     """Fetch the latest yt-dlp release binary straight from the CDN download
-    URL (no api.github.com involved) and atomically replace `dest`."""
+    URL (no api.github.com involved) and atomically replace `dest`.
+    Runs in a worker thread so the ~20MB of network reads + disk writes
+    never block the event loop (which may be pushing progress WebSockets)."""
     import os
     import sys as _sys
+    import uuid
 
     import httpx
 
     asset = _YTDLP_RELEASE_ASSETS.get(_sys.platform, "yt-dlp")
     url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
-    tmp = dest.with_name(dest.name + ".new")
-    try:
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=httpx.Timeout(180.0, connect=15.0)
-        ) as client:
-            async with client.stream("GET", url) as resp:
-                resp.raise_for_status()
-                with open(tmp, "wb") as fh:
-                    async for chunk in resp.aiter_bytes(1 << 16):
-                        fh.write(chunk)
-        if os.name == "posix":
-            os.chmod(tmp, 0o755)
-        os.replace(tmp, dest)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    # Unique temp name per attempt: concurrent updates must not interleave
+    # writes into one file. Same directory as dest keeps os.replace atomic.
+    tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.new")
+
+    def _fetch() -> None:
+        # Sweep temp files a previous hard-killed run may have left behind
+        # (normal failures clean up after themselves below). Age-gated so a
+        # concurrent update's in-progress temp file is never touched.
+        import time
+        for stale in dest.parent.glob(f"{dest.name}.*.new"):
+            try:
+                if time.time() - stale.stat().st_mtime > 3600:
+                    stale.unlink()
+            except OSError:
+                pass
+        try:
+            with httpx.Client(
+                follow_redirects=True, timeout=httpx.Timeout(180.0, connect=15.0)
+            ) as client:
+                with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    with open(tmp, "wb") as fh:
+                        for chunk in resp.iter_bytes(1 << 16):
+                            fh.write(chunk)
+            if os.name == "posix":
+                os.chmod(tmp, 0o755)
+            os.replace(tmp, dest)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    await asyncio.to_thread(_fetch)
 
 
 async def update_ytdlp() -> dict[str, Any]:
