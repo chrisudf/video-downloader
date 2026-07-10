@@ -151,18 +151,68 @@ _PERMISSION_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# `-U` asks api.github.com for the latest version before downloading anything;
+# anonymous API calls are capped at 60/hour per IP, so shared IPs / VPNs hit
+# "HTTP Error 403: rate limit exceeded" long before any real abuse.
+_RATE_LIMIT_RE = re.compile(r"HTTP Error 403|rate.?limit", re.IGNORECASE)
+
+# Release *download* URLs are served by GitHub's CDN and are not subject to
+# the API rate limit, so they work even when the version check above 403s.
+_YTDLP_RELEASE_ASSETS = {
+    "win32": "yt-dlp.exe",
+    "darwin": "yt-dlp_macos",
+}
+
+
+async def _download_latest_ytdlp(dest: Path) -> None:
+    """Fetch the latest yt-dlp release binary straight from the CDN download
+    URL (no api.github.com involved) and atomically replace `dest`."""
+    import os
+    import sys as _sys
+
+    import httpx
+
+    asset = _YTDLP_RELEASE_ASSETS.get(_sys.platform, "yt-dlp")
+    url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
+    tmp = dest.with_name(dest.name + ".new")
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=httpx.Timeout(180.0, connect=15.0)
+        ) as client:
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as fh:
+                    async for chunk in resp.aiter_bytes(1 << 16):
+                        fh.write(chunk)
+        if os.name == "posix":
+            os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
 
 async def update_ytdlp() -> dict[str, Any]:
-    """Run `yt-dlp.exe -U`. Returns combined stdout/stderr and new version."""
+    """Run `yt-dlp.exe -U`. Returns combined stdout/stderr and new version.
+    If the version check is rate-limited by the GitHub API, falls back to
+    downloading the latest release binary directly."""
     import shutil
     path = config.ytdlp_path
     # Accept both absolute paths and bare command names (PATH lookup) —
     # consistent with _ytdlp_info above.
-    if shutil.which(path) is None:
+    resolved = shutil.which(path)
+    if resolved is None:
         return {"ok": False, "error": f"yt-dlp not found at {path}", "log": ""}
     rc, out, err = await _run([path, "-U", "--no-colors"], timeout=60.0)
     log = (out + err).strip()
     log = re.sub(r"\x1b\[[0-9;]*m", "", log)  # strip ANSI just in case
+    if rc != 0 and _RATE_LIMIT_RE.search(log):
+        try:
+            await _download_latest_ytdlp(Path(resolved))
+            rc = 0
+            log += "\n[fallback] GitHub API rate-limited; downloaded the latest release binary directly instead."
+        except Exception as e:  # noqa: BLE001
+            log += f"\n[fallback] direct download also failed: {e}"
     permission_error = rc != 0 and bool(_PERMISSION_ERROR_RE.search(log))
     # Re-query version after update
     new_info = await _ytdlp_info()
