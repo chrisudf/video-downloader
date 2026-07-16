@@ -275,6 +275,42 @@ async def update_ytdlp() -> dict[str, Any]:
     }
 
 
+async def _verify_executable(path: Path, *, min_size: int = 1_000_000) -> Optional[str]:
+    """Return None if `path` looks like a runnable yt-dlp binary, else an
+    error string. Guards against truncated / corrupt copies that Windows
+    reports as 'Unsupported 16-Bit Application'."""
+    import sys as _sys
+
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        return f"cannot stat file: {e}"
+    if size < min_size:
+        return f"file is only {size} bytes — expected a multi-MB binary (truncated copy?)"
+
+    # Magic-header check: PE executables start with "MZ"; ELF with 0x7F ELF.
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError as e:
+        return f"cannot read file: {e}"
+    if _sys.platform == "win32":
+        if head[:2] != b"MZ":
+            return "not a valid Windows executable (missing MZ header)"
+    else:
+        # yt-dlp on posix ships as a zipimport python archive (starts with a
+        # shebang) rather than an ELF — accept a shebang or ELF magic.
+        if not (head.startswith(b"#!") or head[:4] == b"\x7fELF"):
+            return "not a recognised executable/script header"
+
+    # Ultimate test: does it actually run?
+    rc, out, err = await _run([str(path), "--version"], timeout=15.0)
+    if rc != 0 or not out.strip():
+        detail = (err or out or "no output").strip()[:200]
+        return f"binary did not run: {detail}"
+    return None
+
+
 def _suggest_relocation_dest() -> str:
     """Where to move yt-dlp.exe so future -U doesn't need admin.
     Windows: %LOCALAPPDATA%\\Programs\\yt-dlp\\yt-dlp.exe
@@ -293,7 +329,9 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
     """Copy yt-dlp.exe to a user-writable location and point config there.
     Leaves the original file in place (deleting from a system dir would need
     the same admin rights we're trying to avoid)."""
+    import os
     import shutil
+    import uuid
 
     src = config.ytdlp_path
     # Defaults are bare command names ("yt-dlp.exe"/"yt-dlp"), so resolve via
@@ -304,14 +342,38 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
         return {"ok": False, "error": f"source not found: {src}"}
     dest = destination or _suggest_relocation_dest()
     dest_path = Path(dest)
+
+    # Copy to a temp name in the destination dir, verify it, then atomically
+    # swap into place. This guarantees we never leave a half-written or
+    # corrupt file at dest_path — and only touch config once the new binary
+    # is proven runnable.
+    tmp = dest_path.with_name(f"{dest_path.name}.{uuid.uuid4().hex[:8]}.new")
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(resolved, dest_path)
+        shutil.copy2(resolved, tmp)
     except PermissionError as e:
         return {"ok": False, "error": f"cannot write to {dest}: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
-    # Update config
+
+    # Verify the copy is intact before it can become the active binary.
+    src_size = Path(resolved).stat().st_size if Path(resolved).exists() else 1_000_000
+    verify_err = await _verify_executable(tmp, min_size=min(src_size, 1_000_000))
+    if verify_err:
+        tmp.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "error": f"copied file failed verification: {verify_err}. "
+            "Original config left unchanged.",
+        }
+
+    try:
+        os.replace(tmp, dest_path)
+    except Exception as e:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        return {"ok": False, "error": f"could not finalise copy: {e}"}
+
+    # Update config only after the verified binary is in place.
     config.update({"ytdlp_path": str(dest_path)})
     import sys as _sys
     note = "Original file left in place. Delete manually if you want."
