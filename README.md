@@ -100,6 +100,31 @@ stream at hand.
 > that header-passed cookies get scoped to the downloaded URL's domain.
 > Prefer a `Referer`/`User-Agent` when that is enough.
 
+#### Playlist pre-flight
+
+Before launching N_m3u8DL-RE, the app fetches the playlist once itself using
+exactly the headers the download will use. N_m3u8DL-RE retries an unreachable
+manifest 10 times with no flag to disable it, so a dead URL used to cost about
+a minute and then report a misleading "failed to download segments". A refusal
+is now reported in about a second, with the cause named:
+
+- **403/401 on a URL carrying a signature** (`expires=`, `token=`, `sig=`,
+  `X-Amz-Signature=`, …) — reported as an expired or IP-bound signature.
+  Retrying and adding headers are both pointless; the URL has to be re-fetched.
+- **403/401 on a URL with no signature** — reported as a probable missing
+  `Referer`/`Cookie`/`User-Agent`, pointing at the setting above.
+- **404/410** — reported as gone.
+
+Only unambiguous client-side rejections abort. Timeouts, DNS and TLS failures,
+and 5xx responses fall through to the real downloader, which retries for good
+reason. The pre-flight costs one extra HTTP request per download.
+
+Two known limits: a token embedded in the URL *path* rather than the query
+string is indistinguishable from a normal path segment, so such a URL gets the
+neutral "missing header" message; and a server that rejects `httpx` but accepts
+N_m3u8DL-RE would be misreported — which is why only clear 4xx rejections,
+reproduced with identical headers, are treated as fatal.
+
 ---
 
 ## How it works
