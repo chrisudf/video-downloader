@@ -167,8 +167,12 @@ _YTDLP_RELEASE_ASSETS = {
 async def _download_latest_ytdlp(dest: Path) -> None:
     """Fetch the latest yt-dlp release binary straight from the CDN download
     URL (no api.github.com involved) and atomically replace `dest`.
-    Runs in a worker thread so the ~20MB of network reads + disk writes
-    never block the event loop (which may be pushing progress WebSockets)."""
+    The download lands on a temp file that is verified (size + magic header +
+    an actual `--version` run) *before* it is swapped in, so a truncated
+    transfer or an HTML error page can never clobber a working install.
+    The transfer runs in a worker thread so the ~20MB of network reads + disk
+    writes never block the event loop (which may be pushing progress
+    WebSockets)."""
     import os
     import sys as _sys
     import uuid
@@ -206,12 +210,26 @@ async def _download_latest_ytdlp(dest: Path) -> None:
                             fh.write(chunk)
             if os.name == "posix":
                 os.chmod(tmp, 0o755)
-            os.replace(tmp, dest)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
 
     await asyncio.to_thread(_fetch)
+
+    # Only swap in a binary we've proven runnable. Anything else — an HTML
+    # error page from the CDN, a connection cut mid-stream — must leave the
+    # existing yt-dlp exactly where it was.
+    try:
+        verify_err = await _verify_executable(tmp)
+        if verify_err:
+            raise RuntimeError(
+                f"downloaded file failed verification: {verify_err}; "
+                f"existing binary left untouched"
+            )
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 async def update_ytdlp() -> dict[str, Any]:
