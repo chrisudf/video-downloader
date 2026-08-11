@@ -357,7 +357,13 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
     # Verify the copy is intact before it can become the active binary.
-    src_size = Path(resolved).stat().st_size if Path(resolved).exists() else 1_000_000
+    # stat() on the source can fail (permissions, a path that vanished between
+    # which() and here) — that must not turn a recoverable verification step
+    # into an unhandled 500 after the temp copy already exists.
+    try:
+        src_size = Path(resolved).stat().st_size
+    except OSError:
+        src_size = 1_000_000
     verify_err = await _verify_executable(tmp, min_size=min(src_size, 1_000_000))
     if verify_err:
         tmp.unlink(missing_ok=True)
