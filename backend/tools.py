@@ -151,21 +151,137 @@ _PERMISSION_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# `-U` asks api.github.com for the latest version before downloading anything;
+# anonymous API calls are capped at 60/hour per IP, so shared IPs / VPNs hit
+# "HTTP Error 403: rate limit exceeded" long before any real abuse.
+_RATE_LIMIT_RE = re.compile(r"HTTP Error 403|rate.?limit", re.IGNORECASE)
+
+# Release *download* URLs are served by GitHub's CDN and are not subject to
+# the API rate limit, so they work even when the version check above 403s.
+_YTDLP_RELEASE_ASSETS = {
+    "win32": "yt-dlp.exe",
+    "darwin": "yt-dlp_macos",
+}
+
+
+async def _download_latest_ytdlp(dest: Path) -> None:
+    """Fetch the latest yt-dlp release binary straight from the CDN download
+    URL (no api.github.com involved) and atomically replace `dest`.
+    The download lands on a temp file that is verified (size + magic header +
+    an actual `--version` run) *before* it is swapped in, so a truncated
+    transfer or an HTML error page can never clobber a working install.
+    The transfer runs in a worker thread so the ~20MB of network reads + disk
+    writes never block the event loop (which may be pushing progress
+    WebSockets)."""
+    import os
+    import sys as _sys
+    import uuid
+
+    import httpx
+
+    asset = _YTDLP_RELEASE_ASSETS.get(_sys.platform, "yt-dlp")
+    url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
+    # Unique temp name per attempt: concurrent updates must not interleave
+    # writes into one file. Same directory as dest keeps os.replace atomic.
+    tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.new")
+
+    def _fetch() -> None:
+        # dest may be the app-managed install dir, which doesn't exist until
+        # the first fallback download lands there.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Sweep temp files a previous hard-killed run may have left behind
+        # (normal failures clean up after themselves below). Age-gated so a
+        # concurrent update's in-progress temp file is never touched.
+        import time
+        for stale in dest.parent.glob(f"{dest.name}.*.new"):
+            try:
+                if time.time() - stale.stat().st_mtime > 3600:
+                    stale.unlink()
+            except OSError:
+                pass
+        try:
+            with httpx.Client(
+                follow_redirects=True, timeout=httpx.Timeout(180.0, connect=15.0)
+            ) as client:
+                with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    with open(tmp, "wb") as fh:
+                        for chunk in resp.iter_bytes(1 << 16):
+                            fh.write(chunk)
+            if os.name == "posix":
+                os.chmod(tmp, 0o755)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    await asyncio.to_thread(_fetch)
+
+    # Only swap in a binary we've proven runnable. Anything else — an HTML
+    # error page from the CDN, a connection cut mid-stream — must leave the
+    # existing yt-dlp exactly where it was.
+    try:
+        verify_err = await _verify_executable(tmp)
+        if verify_err:
+            raise RuntimeError(
+                f"downloaded file failed verification: {verify_err}; "
+                f"existing binary left untouched"
+            )
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
 
 async def update_ytdlp() -> dict[str, Any]:
-    """Run `yt-dlp.exe -U`. Returns combined stdout/stderr and new version."""
+    """Run `yt-dlp -U`. Returns combined stdout/stderr and new version.
+    If the version check is rate-limited by the GitHub API, falls back to
+    downloading the latest release binary directly."""
     import shutil
     path = config.ytdlp_path
     # Accept both absolute paths and bare command names (PATH lookup) —
     # consistent with _ytdlp_info above.
-    if shutil.which(path) is None:
+    resolved = shutil.which(path)
+    if resolved is None:
         return {"ok": False, "error": f"yt-dlp not found at {path}", "log": ""}
     rc, out, err = await _run([path, "-U", "--no-colors"], timeout=60.0)
     log = (out + err).strip()
     log = re.sub(r"\x1b\[[0-9;]*m", "", log)  # strip ANSI just in case
-    permission_error = rc != 0 and bool(_PERMISSION_ERROR_RE.search(log))
+    fallback_ok = False
+    if rc != 0 and _RATE_LIMIT_RE.search(log):
+        bare = Path(path).name == path
+        if bare:
+            # A bare command name may resolve to a package-manager install
+            # (brew symlink, pipx shim) that a release binary must not
+            # clobber. Install to the app-managed location instead and point
+            # config there — same contract as relocate_ytdlp.
+            dest = Path(_suggest_relocation_dest())
+        else:
+            # Explicit file path: update in place, but follow symlinks so we
+            # rewrite the target file rather than replacing the link itself.
+            dest = Path(resolved).resolve()
+        try:
+            await _download_latest_ytdlp(dest)
+            fallback_ok = True
+            log += "\n[fallback] GitHub API rate-limited; downloaded the latest release binary directly instead."
+            if bare:
+                config.update({"ytdlp_path": str(dest)})
+                log += (
+                    f"\n[fallback] '{path}' resolves via PATH (possibly a package-manager "
+                    f"install), so the new binary went to {dest} and config now points "
+                    f"there; {resolved} was left untouched."
+                )
+        except Exception as e:  # noqa: BLE001
+            log += f"\n[fallback] direct download also failed: {e}"
+    permission_error = rc != 0 and not fallback_ok and bool(_PERMISSION_ERROR_RE.search(log))
     # Re-query version after update
     new_info = await _ytdlp_info()
+    if fallback_ok:
+        # -U's exit code only reflects the rate-limited version check; judge
+        # the fallback by whether the re-queried binary actually runs, so a
+        # broken download can't report ok: true.
+        rc = 0 if new_info.get("available") else 1
+        if rc != 0:
+            log += "\n[fallback] downloaded binary is not runnable."
     return {
         "ok": rc == 0,
         "exit_code": rc,
@@ -175,6 +291,42 @@ async def update_ytdlp() -> dict[str, Any]:
         "permission_error": permission_error,
         "suggested_relocation": _suggest_relocation_dest() if permission_error else None,
     }
+
+
+async def _verify_executable(path: Path, *, min_size: int = 1_000_000) -> Optional[str]:
+    """Return None if `path` looks like a runnable yt-dlp binary, else an
+    error string. Guards against truncated / corrupt copies that Windows
+    reports as 'Unsupported 16-Bit Application'."""
+    import sys as _sys
+
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        return f"cannot stat file: {e}"
+    if size < min_size:
+        return f"file is only {size} bytes — expected a multi-MB binary (truncated copy?)"
+
+    # Magic-header check: PE executables start with "MZ"; ELF with 0x7F ELF.
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(4)
+    except OSError as e:
+        return f"cannot read file: {e}"
+    if _sys.platform == "win32":
+        if head[:2] != b"MZ":
+            return "not a valid Windows executable (missing MZ header)"
+    else:
+        # yt-dlp on posix ships as a zipimport python archive (starts with a
+        # shebang) rather than an ELF — accept a shebang or ELF magic.
+        if not (head.startswith(b"#!") or head[:4] == b"\x7fELF"):
+            return "not a recognised executable/script header"
+
+    # Ultimate test: does it actually run?
+    rc, out, err = await _run([str(path), "--version"], timeout=15.0)
+    if rc != 0 or not out.strip():
+        detail = (err or out or "no output").strip()[:200]
+        return f"binary did not run: {detail}"
+    return None
 
 
 def _suggest_relocation_dest() -> str:
@@ -195,27 +347,74 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
     """Copy yt-dlp.exe to a user-writable location and point config there.
     Leaves the original file in place (deleting from a system dir would need
     the same admin rights we're trying to avoid)."""
+    import os
     import shutil
+    import uuid
 
     src = config.ytdlp_path
-    if not Path(src).is_file():
+    # Defaults are bare command names ("yt-dlp.exe"/"yt-dlp"), so resolve via
+    # PATH the same way _ytdlp_info/update_ytdlp do — Path("yt-dlp").is_file()
+    # would fail on a typical install.
+    resolved = shutil.which(src)
+    if resolved is None:
         return {"ok": False, "error": f"source not found: {src}"}
     dest = destination or _suggest_relocation_dest()
     dest_path = Path(dest)
+
+    # Copy to a temp name in the destination dir, verify it, then atomically
+    # swap into place. This guarantees we never leave a half-written or
+    # corrupt file at dest_path — and only touch config once the new binary
+    # is proven runnable.
+    tmp = dest_path.with_name(f"{dest_path.name}.{uuid.uuid4().hex[:8]}.new")
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest_path)
+        shutil.copy2(resolved, tmp)
     except PermissionError as e:
         return {"ok": False, "error": f"cannot write to {dest}: {e}"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
-    # Update config
+
+    # Verify the copy is intact before it can become the active binary.
+    # stat() on the source can fail (permissions, a path that vanished between
+    # which() and here) — that must not turn a recoverable verification step
+    # into an unhandled 500 after the temp copy already exists.
+    try:
+        src_size = Path(resolved).stat().st_size
+    except OSError:
+        src_size = 1_000_000
+    verify_err = await _verify_executable(tmp, min_size=min(src_size, 1_000_000))
+    if verify_err:
+        tmp.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "error": f"copied file failed verification: {verify_err}. "
+            "Original config left unchanged.",
+        }
+
+    try:
+        os.replace(tmp, dest_path)
+    except Exception as e:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        return {"ok": False, "error": f"could not finalise copy: {e}"}
+
+    # Update config only after the verified binary is in place.
     config.update({"ytdlp_path": str(dest_path)})
+    import sys as _sys
+    note = "Original file left in place. Delete manually if you want."
+    if _sys.platform != "win32":
+        # ~/.local/bin is often not on PATH (especially on macOS); that's
+        # fine for us — config.json stores the absolute path — but worth
+        # saying so the user isn't surprised when `yt-dlp` stops resolving
+        # in their shell.
+        note += (
+            " Note: ~/.local/bin may not be on your PATH; the app is "
+            "unaffected (it uses the absolute path from config.json)."
+        )
     return {
         "ok": True,
-        "source": src,
+        "source": resolved,
         "destination": str(dest_path),
-        "note": "Original file left in place. Delete manually if you want.",
+        "note": note,
     }
 
 
@@ -226,6 +425,6 @@ def stale_hint(age_days: Optional[int], threshold: int = 30) -> Optional[str]:
     if age_days <= threshold:
         return None
     return (
-        f"Your yt-dlp.exe is {age_days} days old — YouTube ships anti-bot changes "
+        f"Your yt-dlp is {age_days} days old — YouTube ships anti-bot changes "
         f"faster than that. Open Settings ⚙ → click 'Update yt-dlp'."
     )

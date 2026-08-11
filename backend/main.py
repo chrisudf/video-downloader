@@ -205,9 +205,13 @@ async def reveal_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(404, f"path does not exist: {target}")
     target_path = str(Path(target).resolve())
     if sys.platform == "win32":
-        # /select highlights the file inside the folder
+        # /select highlights the file inside the folder. Must be passed as a
+        # single string: with a list, list2cmdline wraps the whole
+        # '/select,path' in quotes whenever the path contains spaces, and
+        # explorer then ignores it and opens the default folder instead.
+        # Quoting only the path is safe — filenames can't contain '"'.
         if Path(target_path).is_file():
-            subprocess.Popen(["explorer", f"/select,{target_path}"])
+            subprocess.Popen(f'explorer /select,"{target_path}"')
         else:
             subprocess.Popen(["explorer", target_path])
     elif sys.platform == "darwin":
