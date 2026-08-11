@@ -433,13 +433,52 @@ function openJobSocket(jobId) {
 }
 
 // ===== Settings =====
+// custom_headers is the only object-valued setting; the generic loop below
+// would render it as "[object Object]", so it round-trips through a
+// "Name: Value" per line textarea instead.
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function headersToText(obj) {
+  if (!obj || typeof obj !== "object") return "";
+  return Object.entries(obj).map(([k, v]) => `${k}: ${v}`).join("\n");
+}
+
+/** Parse the textarea into {headers, errors}. Splits on the FIRST colon so
+ *  values containing colons (URLs!) survive. */
+function parseHeadersText(text) {
+  const headers = {};
+  const errors = [];
+  for (const [i, rawLine] of String(text || "").split("\n").entries()) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const colon = line.indexOf(":");
+    if (colon < 1) {
+      errors.push(`第 ${i + 1} 行缺少 "名称: 值" 中的冒号`);
+      continue;
+    }
+    const name = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (!HEADER_NAME_RE.test(name)) {
+      errors.push(`第 ${i + 1} 行的头名称无效：${name}`);
+      continue;
+    }
+    if (!value) {
+      errors.push(`第 ${i + 1} 行的 ${name} 没有值`);
+      continue;
+    }
+    headers[name] = value;
+  }
+  return { headers, errors };
+}
+
 $("settings-btn").addEventListener("click", async () => {
   const cfg = await api("/api/config");
   for (const [k, v] of Object.entries(cfg)) {
     const el = settingsForm.elements.namedItem(k);
-    if (el) el.value = v;
+    if (el) el.value = k === "custom_headers" ? headersToText(v) : v;
   }
   saveDirInput.value = cfg.save_dir || "";
+  $("custom-headers-error").classList.add("hidden");
   settingsDialog.showModal();
   loadToolVersions();
 });
@@ -583,11 +622,24 @@ $("update-ytdlp-btn").addEventListener("click", runYtdlpUpdate);
 
 settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const errEl = $("custom-headers-error");
+  const { headers, errors } = parseHeadersText($("custom-headers").value);
+  if (errors.length) {
+    // Don't silently drop malformed lines — a typo'd header is exactly the
+    // kind of thing the user would otherwise spend an hour debugging.
+    errEl.textContent = "请求头有问题：" + errors.join("；");
+    errEl.classList.remove("hidden");
+    return;
+  }
+  errEl.classList.add("hidden");
+
   const fd = new FormData(settingsForm);
   const patch = {};
   for (const [k, v] of fd.entries()) {
+    if (k === "custom_headers") continue;   // object-valued, set below
     patch[k] = k === "max_concurrent_downloads" ? Number(v) : v;
   }
+  patch.custom_headers = headers;
   await api("/api/config", { method: "POST", body: JSON.stringify(patch) });
   settingsDialog.close();
 });

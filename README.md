@@ -63,11 +63,42 @@ Open <http://127.0.0.1:8765> in your browser.
   "m3u8dl_path": "N_m3u8DL-RE",
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
-  "max_concurrent_downloads": 2
+  "max_concurrent_downloads": 2,
+  "custom_headers": {
+    "Referer": "https://example.com/"
+  }
 }
 ```
 
 Settings are also editable from the gear icon in the UI.
+
+#### Custom headers
+
+`custom_headers` are attached to every probe and download — the browser sniff,
+yt-dlp, and N_m3u8DL-RE all receive them. Use it for streams that require a
+`Referer`, a `Cookie`, or a specific `User-Agent`: self-hosted media servers,
+company-internal video, and course platforms that only serve content to a
+logged-in session.
+
+In the UI, enter one `Name: Value` per line. Values may contain colons, so
+`Referer: https://example.com:8443/watch` works as written.
+
+Precedence, weakest to strongest:
+
+1. Built-in defaults (a desktop `User-Agent`, `Referer` guessed from the
+   stream's own origin)
+2. `custom_headers`
+3. Headers belonging to a specific job — the Referer field in the direct-m3u8
+   form, or the one the browser sniff observed for that exact URL
+
+So a configured `Referer` fills in whenever the app would otherwise be
+guessing, but never overrides a Referer that was actually observed for the
+stream at hand.
+
+> Passing session cookies this way sends them with every request the app
+> makes, and they are stored in cleartext in `config.json`. yt-dlp also warns
+> that header-passed cookies get scoped to the downloaded URL's domain.
+> Prefer a `Referer`/`User-Agent` when that is enough.
 
 ---
 

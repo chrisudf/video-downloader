@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from .. import tools
-from ..config import config
+from ..config import config, normalize_headers
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
 from .registry import register
@@ -89,10 +89,20 @@ def _parse_attr(attrs: str, key: str) -> Optional[str]:
 
 
 def _build_headers(url: str, referer: Optional[str], extra: Optional[dict[str, str]] = None) -> dict[str, str]:
-    headers = {
-        "User-Agent": DEFAULT_UA,
-        "Referer": referer or _origin(url) + "/",
-    }
+    """Precedence, weakest first: our built-in defaults, the headers
+    configured in Settings, then `extra` (an explicit call-site override).
+
+    `referer` is deliberately ranked ABOVE the configured Referer: it is the
+    page we actually observed this URL on, whereas the configured one is a
+    global default. Letting a global value shadow a correctly-derived
+    per-site Referer would break the common flow to fix the rare one. The
+    configured Referer still applies whenever we'd otherwise be guessing from
+    the URL's own origin."""
+    headers = {"User-Agent": DEFAULT_UA}
+    headers.update(config.headers())
+    headers["Referer"] = (
+        referer or headers.get("Referer") or _origin(url) + "/"
+    )
     if extra:
         headers.update(extra)
     return headers
@@ -229,10 +239,12 @@ class M3U8Downloader(BaseDownloader):
         if ff:
             args += ["--ffmpeg-binary-path", ff]
 
-        # Headers — combine Referer/UA + any extra
-        merged_headers = dict(request.headers)
+        # Headers — configured defaults first, then whatever this specific
+        # request carries (probe-derived Referer, or a Referer the user typed
+        # into the direct-m3u8 form), which wins on conflict.
+        merged_headers = {**config.headers(), **request.headers}
         merged_headers.setdefault("User-Agent", DEFAULT_UA)
-        for k, v in merged_headers.items():
+        for k, v in normalize_headers(merged_headers).items():
             args += ["--header", f"{k}: {v}"]
 
         proc = await asyncio.create_subprocess_exec(

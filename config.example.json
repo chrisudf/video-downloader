@@ -4,5 +4,8 @@
   "m3u8dl_path": "N_m3u8DL-RE",
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
-  "max_concurrent_downloads": 2
+  "max_concurrent_downloads": 2,
+  "custom_headers": {
+    "Referer": "https://example.com/"
+  }
 }

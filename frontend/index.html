@@ -109,6 +109,17 @@
       <label>ffmpeg 路径 <input name="ffmpeg_path" type="text" /></label>
       <label>同时下载数 <input name="max_concurrent_downloads" type="number" min="1" max="10" /></label>
 
+      <label>自定义请求头
+        <textarea name="custom_headers" id="custom-headers" rows="4" spellcheck="false"
+          placeholder="Referer: https://example.com/&#10;Cookie: session=..."></textarea>
+      </label>
+      <p class="muted small">
+        每行一条 <code>名称: 值</code>，会附加到所有探测和下载请求上。
+        用于需要 Referer / Cookie / 特定 User-Agent 的自建服务器或登录后才能看的内容。
+        单个任务里填的 Referer 优先级更高。
+      </p>
+      <div id="custom-headers-error" class="status error hidden"></div>
+
       <fieldset class="tool-versions">
         <legend>工具版本</legend>
         <div id="tool-versions-list" class="muted small">加载中…</div>

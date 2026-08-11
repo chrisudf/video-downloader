@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
+from .config import config, normalize_headers
+
 # Playwright is heavy — import lazily so the app still starts if it's missing.
 try:
     from playwright.async_api import async_playwright  # type: ignore[import-not-found]
@@ -111,8 +113,22 @@ async def sniff(
                 "viewport": {"width": 1280, "height": 720},
                 "bypass_csp": True,
             }
+            extra_headers: dict[str, str] = {}
             if referer:
-                context_kwargs["extra_http_headers"] = {"Referer": referer}
+                extra_headers["Referer"] = referer
+            # Apply the headers configured in Settings, so a page that needs a
+            # Cookie/Referer to play can be sniffed at all — and so the
+            # Referer we observe matches what the downloader will later send.
+            for k, v in normalize_headers(config.headers()).items():
+                # Playwright takes the UA as its own context argument;
+                # setting it via extra_http_headers as well is ignored for
+                # navigator.userAgent and would desync JS-side fingerprinting.
+                if k.lower() == "user-agent":
+                    context_kwargs["user_agent"] = v
+                else:
+                    extra_headers[k] = v
+            if extra_headers:
+                context_kwargs["extra_http_headers"] = extra_headers
             context = await browser.new_context(**context_kwargs)
 
             done = asyncio.Event()

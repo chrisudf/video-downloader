@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .. import tools
-from ..config import config
+from ..config import config, normalize_headers
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
 from .registry import register
@@ -39,6 +39,15 @@ _PROGRESS_RE = re.compile(
 _DEST_RE = re.compile(r"\[(?:download|Merger|ExtractAudio)\]\s+(?:Destination|Merging formats into):?\s+\"?(?P<path>.+?)\"?$")
 
 
+def _header_args(headers: dict[str, str]) -> list[str]:
+    """Render headers as yt-dlp CLI args. Note yt-dlp splits --add-header on
+    the FIRST colon, so "Name:Value" (no space) is the documented form."""
+    args: list[str] = []
+    for k, v in normalize_headers(headers).items():
+        args += ["--add-header", f"{k}:{v}"]
+    return args
+
+
 async def _probe_via_exe(url: str) -> dict[str, Any]:
     """Ask yt-dlp.exe for metadata as JSON. Preferred path — the bundled
     JS runtime handles YouTube's current n-challenge / bot check better
@@ -53,6 +62,10 @@ async def _probe_via_exe(url: str) -> dict[str, Any]:
         ytdlp, url,
         "--dump-single-json", "--no-download", "--no-warnings", "--no-playlist",
     ]
+    # Probe must use the same headers as the download, or a site that gates
+    # metadata behind a Cookie/Referer fails here before the user ever gets a
+    # format list.
+    args += _header_args(config.headers())
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
@@ -76,6 +89,9 @@ async def _probe_via_pip(url: str) -> dict[str, Any]:
     ff = tools.resolve_ffmpeg()
     if ff:
         opts["ffmpeg_location"] = ff
+    hdrs = normalize_headers(config.headers())
+    if hdrs:
+        opts["http_headers"] = hdrs
 
     def _run() -> dict[str, Any]:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -192,9 +208,9 @@ class YouTubeDownloader(BaseDownloader):
         if ff:
             args += ["--ffmpeg-location", ff]
 
-        # Pass through any user-supplied headers (cookies, custom Referer, ...)
-        for k, v in request.headers.items():
-            args += ["--add-header", f"{k}:{v}"]
+        # Configured headers (cookies, custom Referer, ...) first, then any
+        # this request carries, which wins on conflict.
+        args += _header_args({**config.headers(), **request.headers})
 
         proc = await asyncio.create_subprocess_exec(
             *args,

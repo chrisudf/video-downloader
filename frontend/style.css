@@ -93,7 +93,7 @@ header h1 {
   align-self: stretch;
 }
 
-input[type="text"], input[type="number"], select {
+input[type="text"], input[type="number"], select, textarea {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -103,9 +103,18 @@ input[type="text"], input[type="number"], select {
   font-family: inherit;
   width: 100%;
 }
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+textarea {
+  /* Header lines are structural — a monospace font makes a stray space or a
+     missing colon visible. Vertical-only resize keeps the dialog intact. */
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
 }
 
 button {
