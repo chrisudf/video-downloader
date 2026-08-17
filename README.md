@@ -63,11 +63,67 @@ Open <http://127.0.0.1:8765> in your browser.
   "m3u8dl_path": "N_m3u8DL-RE",
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
-  "max_concurrent_downloads": 2
+  "max_concurrent_downloads": 2,
+  "custom_headers": {
+    "Referer": "https://example.com/"
+  }
 }
 ```
 
 Settings are also editable from the gear icon in the UI.
+
+#### Custom headers
+
+`custom_headers` are attached to every probe and download — the browser sniff,
+yt-dlp, and N_m3u8DL-RE all receive them. Use it for streams that require a
+`Referer`, a `Cookie`, or a specific `User-Agent`: self-hosted media servers,
+company-internal video, and course platforms that only serve content to a
+logged-in session.
+
+In the UI, enter one `Name: Value` per line. Values may contain colons, so
+`Referer: https://example.com:8443/watch` works as written.
+
+Precedence, weakest to strongest:
+
+1. Built-in defaults (a desktop `User-Agent`, `Referer` guessed from the
+   stream's own origin)
+2. `custom_headers`
+3. Headers belonging to a specific job — the Referer field in the direct-m3u8
+   form, or the one the browser sniff observed for that exact URL
+
+So a configured `Referer` fills in whenever the app would otherwise be
+guessing, but never overrides a Referer that was actually observed for the
+stream at hand.
+
+> Passing session cookies this way sends them with every request the app
+> makes, and they are stored in cleartext in `config.json`. yt-dlp also warns
+> that header-passed cookies get scoped to the downloaded URL's domain.
+> Prefer a `Referer`/`User-Agent` when that is enough.
+
+#### Playlist pre-flight
+
+Before launching N_m3u8DL-RE, the app fetches the playlist once itself using
+exactly the headers the download will use. N_m3u8DL-RE retries an unreachable
+manifest 10 times with no flag to disable it, so a dead URL used to cost about
+a minute and then report a misleading "failed to download segments". A refusal
+is now reported in about a second, with the cause named:
+
+- **403/401 on a URL carrying a signature** (`expires=`, `token=`, `sig=`,
+  `X-Amz-Signature=`, …) — reported as an expired or IP-bound signature.
+  Retrying and adding headers are both pointless; the URL has to be re-fetched.
+- **403/401 on a URL with no signature** — reported as a probable missing
+  `Referer`/`Cookie`/`User-Agent`, pointing at the setting above.
+- **404/410** — reported as gone.
+
+Only unambiguous client-side rejections abort. Timeouts, DNS and TLS failures,
+and 5xx responses fall through to the real downloader, which retries for good
+reason. The pre-flight costs one extra HTTP request per download.
+
+Two known limits: a token embedded in the URL *path* rather than the query
+string is indistinguishable from a normal path segment, so such a URL gets the
+neutral "missing header" message; and a server that rejects `httpx` but accepts
+N_m3u8DL-RE would be misreported — which is why only clear 4xx rejections,
+reproduced with identical headers, are treated as fatal.
 
 ---
 

@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from .. import tools
-from ..config import config
+from ..config import config, normalize_headers
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
 from .registry import register
@@ -27,10 +27,102 @@ _M3U8_IN_HTML_RE = re.compile(r"""(?P<u>https?://[^\s'"<>]+\.m3u8[^\s'"<>]*)""",
 _PERCENT_RE = re.compile(r"(\d+\.\d+)\s*%")
 _HTTP_STATUS_RE = re.compile(r"\b(\d{3})\b\s*\(([^)]+)\)")
 
+# Query parameters CDNs use for time-limited signed URLs. Their presence means
+# a 403 is far more likely to be an expired/IP-bound token than a missing
+# header — and no amount of retrying or header tweaking will fix that.
+#
+# Kept deliberately narrow. Claiming "your signature expired" when the real
+# problem is a missing Referer sends the user chasing the wrong thing, so
+# generic names that merely *might* be signing params (e, st, key, id) are
+# excluded — a missed detection just yields the neutral message, whereas a
+# false positive actively misleads.
+#
+# Note this only sees query strings. A token embedded in the URL *path* is
+# indistinguishable from an ordinary path segment and will not be detected.
+_SIGNED_URL_PARAM_RE = re.compile(
+    r"(?:^|[?&])(?:"
+    r"expires?|exp|start_?time|end_?time|valid(?:from|to|until)?|"
+    r"token|sig|signature|policy|credential|md5|"
+    r"x-amz-(?:signature|expires|credential)|__gda__|_hdnea_"
+    r")=",
+    re.IGNORECASE,
+)
 
-def _summarize_failure(log_tail: list[str]) -> str:
+# Response bodies servers return when a signed URL has lapsed.
+_EXPIRY_BODY_RE = re.compile(
+    r"expired|expire|signature|token|not\s+valid|invalid\s+(?:key|token|sig)|"
+    r"access\s+denied|forbidden.*(?:time|date)",
+    re.IGNORECASE,
+)
+
+
+def _is_signed_url(url: str) -> bool:
+    return bool(_SIGNED_URL_PARAM_RE.search(url))
+
+
+def _explain_block(status: int, url: str, body: str) -> str:
+    """Turn a definitive HTTP rejection into an actionable message."""
+    signed = _is_signed_url(url)
+    body_hints_expiry = bool(_EXPIRY_BODY_RE.search(body[:600]))
+
+    if status in (401, 403):
+        if signed or body_hints_expiry:
+            return (
+                f"HTTP {status} — this URL carries a time-limited signature, so it has most "
+                f"likely expired or is bound to the IP/session that generated it. Retrying "
+                f"will not help and neither will custom headers: re-fetch the URL from the "
+                f"source page and start the download promptly."
+            )
+        return (
+            f"HTTP {status} — the server rejected the request. This is usually a missing "
+            f"Referer, Cookie or User-Agent. Set them in Settings -> Custom headers (or the "
+            f"Referer field for a one-off) and try again."
+        )
+    if status == 404:
+        return "HTTP 404 — the playlist is no longer at this URL. Re-fetch it from the source page."
+    if status == 410:
+        return "HTTP 410 — the server says this playlist is permanently gone. Re-fetch it."
+    return f"HTTP {status} — the server refused to serve the playlist."
+
+
+async def _preflight(url: str, headers: dict[str, str]) -> Optional[str]:
+    """Fetch the playlist once, with exactly the headers the downloader will
+    use, to find out whether it is reachable at all.
+
+    Returns an error message if the server *definitively* rejected us, else
+    None. N_m3u8DL-RE retries a failing manifest 10 times with no way to turn
+    that off, so without this a dead URL costs a minute of retries and then
+    reports a vague segment error. Deliberately conservative: anything other
+    than a clear client-side rejection (timeouts, DNS, TLS, 5xx) returns None
+    so the real downloader still gets its chance."""
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                if resp.status_code in (401, 403, 404, 410):
+                    body = ""
+                    try:
+                        chunks = []
+                        async for chunk in resp.aiter_bytes(2048):
+                            chunks.append(chunk)
+                            if sum(len(c) for c in chunks) >= 2048:
+                                break
+                        body = b"".join(chunks).decode("utf-8", errors="replace")
+                    except Exception:  # noqa: BLE001 — body is a nicety, not required
+                        pass
+                    return _explain_block(resp.status_code, str(resp.url), body)
+    except Exception:  # noqa: BLE001
+        # Network hiccup, odd TLS, a server that dislikes httpx specifically —
+        # not grounds to refuse the download.
+        return None
+    return None
+
+
+def _summarize_failure(log_tail: list[str], url: str = "") -> str:
     """Pull a human-readable error out of N_m3u8DL-RE's output, ignoring
-    the .NET stack trace noise."""
+    the .NET stack trace noise. `url` lets a 4xx be attributed to an expired
+    signature only when the URL actually carries one."""
     warn_lines: list[str] = []
     error_lines: list[str] = []
     for line in log_tail:
@@ -54,13 +146,27 @@ def _summarize_failure(log_tail: list[str]) -> str:
         if m:
             code, text = m.groups()
             if code.startswith("4") and is_segment_failure:
+                if _is_signed_url(url):
+                    return (
+                        f"HTTP {code} {text.strip()} on stream segments — this URL carries a "
+                        f"time-limited signature, which has expired or is bound to another "
+                        f"IP/session. Re-fetch it from the source page and start the download "
+                        f"promptly; retrying this URL will not help."
+                    )
+                # No signature in the URL, so blaming an expired token would
+                # send the user chasing the wrong thing — the playlist was
+                # reachable (we pre-flighted it) but segments were refused,
+                # which usually means they need a header of their own.
                 return (
-                    f"HTTP {code} {text.strip()} on stream segments — the m3u8 token most likely "
-                    f"expired or is IP-bound to a different network. Re-fetch the URL from the source "
-                    f"page (e.g. via 'Browser sniff') and start the download within the validity window."
+                    f"HTTP {code} {text.strip()} on stream segments — the playlist loaded but the "
+                    f"segments were refused. They may need a Referer/Cookie of their own "
+                    f"(Settings -> Custom headers), or the stream is restricted by IP/region."
                 )
             if code.startswith("4"):
-                return f"HTTP {code} {text.strip()} — auth/header issue. Try setting Referer to the source page."
+                return (
+                    f"HTTP {code} {text.strip()} — auth/header issue. Set Referer/Cookie in "
+                    f"Settings -> Custom headers, or use the Referer field for a one-off."
+                )
             if code.startswith("5"):
                 return f"HTTP {code} {text.strip()} — CDN server error. Try again later."
 
@@ -89,12 +195,22 @@ def _parse_attr(attrs: str, key: str) -> Optional[str]:
 
 
 def _build_headers(url: str, referer: Optional[str], extra: Optional[dict[str, str]] = None) -> dict[str, str]:
-    headers = {
-        "User-Agent": DEFAULT_UA,
-        "Referer": referer or _origin(url) + "/",
-    }
+    """Precedence, weakest first: our built-in defaults, the headers
+    configured in Settings, then `extra` (an explicit call-site override).
+
+    `referer` is deliberately ranked ABOVE the configured Referer: it is the
+    page we actually observed this URL on, whereas the configured one is a
+    global default. Letting a global value shadow a correctly-derived
+    per-site Referer would break the common flow to fix the rare one. The
+    configured Referer still applies whenever we'd otherwise be guessing from
+    the URL's own origin."""
+    headers = {"User-Agent": DEFAULT_UA}
+    headers.update(config.headers())
+    headers["Referer"] = (
+        referer or headers.get("Referer") or _origin(url) + "/"
+    )
     if extra:
-        headers.update(extra)
+        headers.update(normalize_headers(extra))
     return headers
 
 
@@ -229,11 +345,28 @@ class M3U8Downloader(BaseDownloader):
         if ff:
             args += ["--ffmpeg-binary-path", ff]
 
-        # Headers — combine Referer/UA + any extra
-        merged_headers = dict(request.headers)
-        merged_headers.setdefault("User-Agent", DEFAULT_UA)
-        for k, v in merged_headers.items():
+        # Headers — configured defaults first, then whatever this specific
+        # request carries (probe-derived Referer, or a Referer the user typed
+        # into the direct-m3u8 form), which wins on conflict.
+        # Normalise each side before merging: sniffed request headers arrive
+        # lower-cased from the browser, so merging raw would keep "referer"
+        # and "Referer" as two keys instead of letting the request win.
+        normalized = {
+            **normalize_headers(config.headers()),
+            **normalize_headers(request.headers),
+        }
+        normalized.setdefault("User-Agent", DEFAULT_UA)
+        for k, v in normalized.items():
             args += ["--header", f"{k}: {v}"]
+
+        # Check the playlist ourselves before handing off. N_m3u8DL-RE retries
+        # an unreachable manifest 10 times with no flag to disable it, so a
+        # dead URL otherwise burns ~a minute and then reports a misleading
+        # "failed to download segments".
+        block = await _preflight(request.url, normalized)
+        if block:
+            await on_progress(ProgressEvent(status="error", message=block))
+            raise RuntimeError(block)
 
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -307,7 +440,7 @@ class M3U8Downloader(BaseDownloader):
             await on_progress(ProgressEvent(status="error", message="cancelled"))
             raise asyncio.CancelledError("cancelled")
         if rc != 0:
-            reason = _summarize_failure(log_tail)
+            reason = _summarize_failure(log_tail, request.url)
             await on_progress(ProgressEvent(status="error", message=reason))
             raise RuntimeError(reason)
 
