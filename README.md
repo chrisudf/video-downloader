@@ -18,7 +18,24 @@ A local web UI for downloading videos from YouTube, HLS (`.m3u8`) streams, and J
 
 ---
 
-## Quick start
+## 安装（非开发者）/ Install (non-developers)
+
+不用装 Python、不用命令行：直接用安装包，见 **[docs/INSTALL.md](docs/INSTALL.md)**。
+
+- **Windows** — `VideoDownloader-Setup-win64.exe`，双击安装
+- **macOS** — `VideoDownloader-macos-<arch>.dmg`，拖进 Applications
+
+首次启动自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg）。
+自己构建安装包见 [packaging/README.md](packaging/README.md)。
+
+No Python or terminal needed — grab the installer and follow
+[docs/INSTALL.md](docs/INSTALL.md). First launch auto-downloads the three
+helper tools. To build the installers yourself, see
+[packaging/README.md](packaging/README.md).
+
+---
+
+## Quick start (from source)
 
 ### Prerequisites
 
