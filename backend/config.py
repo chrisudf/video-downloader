@@ -34,8 +34,19 @@ _DEFAULTS: dict[str, Any] = {
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
+def canonical_header_name(name: str) -> str:
+    """Title-case a header name the way HTTP conventionally writes it
+    ("user-agent" -> "User-Agent"). Header names are case-insensitive, so
+    every consumer has to agree on one spelling: otherwise a user-configured
+    "referer" is invisible to headers.get("Referer"), survives a dict merge
+    as a separate key, and gets serialised as a second, conflicting header."""
+    return "-".join(p[:1].upper() + p[1:].lower() for p in name.split("-"))
+
+
 def normalize_headers(value: Any) -> dict[str, str]:
-    """Coerce a config/user-supplied header mapping into a safe dict.
+    """Coerce a config/user-supplied header mapping into a safe dict, with
+    names canonicalised — which also de-duplicates them case-insensitively,
+    last entry winning, matching plain dict-merge semantics.
     Silently drops entries that aren't usable rather than raising — this runs
     on the /api/config path where a bad entry shouldn't brick the app."""
     if not isinstance(value, dict):
@@ -53,7 +64,7 @@ def normalize_headers(value: Any) -> dict[str, str]:
         # Strip anything that could terminate the header/argument.
         if any(c in val for c in ("\r", "\n", "\0")):
             continue
-        out[name] = val
+        out[canonical_header_name(name)] = val
     return out
 
 

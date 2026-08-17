@@ -210,7 +210,12 @@ class YouTubeDownloader(BaseDownloader):
 
         # Configured headers (cookies, custom Referer, ...) first, then any
         # this request carries, which wins on conflict.
-        args += _header_args({**config.headers(), **request.headers})
+        # Normalised on both sides so a lower-cased request header replaces
+        # the configured one instead of being sent alongside it.
+        args += _header_args({
+            **normalize_headers(config.headers()),
+            **normalize_headers(request.headers),
+        })
 
         proc = await asyncio.create_subprocess_exec(
             *args,

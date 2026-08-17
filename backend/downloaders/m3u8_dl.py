@@ -210,7 +210,7 @@ def _build_headers(url: str, referer: Optional[str], extra: Optional[dict[str, s
         referer or headers.get("Referer") or _origin(url) + "/"
     )
     if extra:
-        headers.update(extra)
+        headers.update(normalize_headers(extra))
     return headers
 
 
@@ -348,9 +348,14 @@ class M3U8Downloader(BaseDownloader):
         # Headers — configured defaults first, then whatever this specific
         # request carries (probe-derived Referer, or a Referer the user typed
         # into the direct-m3u8 form), which wins on conflict.
-        merged_headers = {**config.headers(), **request.headers}
-        merged_headers.setdefault("User-Agent", DEFAULT_UA)
-        normalized = normalize_headers(merged_headers)
+        # Normalise each side before merging: sniffed request headers arrive
+        # lower-cased from the browser, so merging raw would keep "referer"
+        # and "Referer" as two keys instead of letting the request win.
+        normalized = {
+            **normalize_headers(config.headers()),
+            **normalize_headers(request.headers),
+        }
+        normalized.setdefault("User-Agent", DEFAULT_UA)
         for k, v in normalized.items():
             args += ["--header", f"{k}: {v}"]
 
