@@ -10,17 +10,28 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import tools
+from . import bootstrap, tools
+from .appdirs import resource_root
 from .browser_sniff import is_available as sniff_available, sniff
 from .config import config
 from .detector import pick_downloader, list_downloaders
 from .downloads_manager import manager
 from .models import DownloadRequest, InspectRequest, InspectResult, JobStatus
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+# resource_root() is the project root when running from source and the
+# PyInstaller bundle dir when frozen — frontend/ is shipped as bundle data.
+FRONTEND_DIR = resource_root() / "frontend"
 
-app = FastAPI(title="Video Downloader", version="0.1.0")
+app = FastAPI(title="Video Downloader", version="0.2.0")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    # Make the managed tools dir (and brew dirs on macOS) resolvable before
+    # the first tool lookup, then kick off the first-run tool download in the
+    # background so the UI can show its progress immediately.
+    bootstrap.augment_path()
+    bootstrap.start_background_bootstrap()
 
 
 # ---- Local-only request guard ----------------------------------------
@@ -83,6 +94,22 @@ async def update_ytdlp() -> dict[str, Any]:
 async def relocate_ytdlp(payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     dest = (payload or {}).get("destination")
     return await tools.relocate_ytdlp(destination=dest)
+
+
+@app.get("/api/tools/bootstrap/status")
+async def bootstrap_status() -> dict[str, Any]:
+    return bootstrap.get_status()
+
+
+@app.post("/api/tools/bootstrap")
+async def bootstrap_start() -> dict[str, Any]:
+    """Download any missing external tools. Returns immediately with the
+    current status; the frontend polls /api/tools/bootstrap/status."""
+    if bootstrap.missing_tools() and bootstrap.get_status()["state"] != "running":
+        task = asyncio.create_task(bootstrap.run_bootstrap())
+        bootstrap._background_tasks.add(task)
+        task.add_done_callback(bootstrap._background_tasks.discard)
+    return bootstrap.get_status()
 
 
 @app.post("/api/inspect", response_model=InspectResult)
@@ -262,6 +289,20 @@ def index() -> FileResponse:
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
+def _already_running(port: int) -> bool:
+    """True if another instance of this app already answers on the port.
+    Non-developers double-click the icon again instead of finding the running
+    copy — reuse the existing instance rather than dying with 'address in
+    use'. Only claims 'running' when the health probe looks like us."""
+    import httpx
+
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/api/config", timeout=2.0)
+        return r.status_code == 200 and "save_dir" in r.json()
+    except Exception:  # noqa: BLE001 — any failure means "not us"
+        return False
+
+
 def main() -> None:
     import sys
 
@@ -273,7 +314,19 @@ def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+    # PATH augmentation must precede even the pre-flight probe below, and
+    # the startup event fires too late for anything main() itself does.
+    bootstrap.augment_path()
+
     url = f"http://127.0.0.1:{config.port}"
+    if _already_running(config.port):
+        print(f"Video Downloader is already running at {url} — opening browser.")
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return
+
     print(f"\nVideo Downloader running at {url}\n")
     try:
         webbrowser.open(url)

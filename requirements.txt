@@ -4,3 +4,11 @@ yt-dlp>=2024.10.0
 httpx>=0.27
 pydantic>=2.6
 websockets>=12.0
+# Browser sniff. run.sh/run.bat call `python -m playwright install chromium`,
+# which requires the package itself to be installed first; it was missing
+# here, so first-run setup died at that step. Also bundled by PyInstaller so
+# packaged builds can sniff via the system Chrome/Edge (no 170MB Chromium).
+playwright>=1.40
+# Optional-but-recommended yt-dlp dependency (AES decryption in some
+# extractors); matters for the bundled pip-fallback probe in frozen builds.
+pycryptodomex

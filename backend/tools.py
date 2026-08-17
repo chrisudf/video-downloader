@@ -64,7 +64,11 @@ async def _ytdlp_info() -> dict[str, Any]:
     # returning None if neither actually exists.
     if shutil.which(path) is None:
         return {"path": path, "available": False}
-    rc, out, err = await _run([path, "--version"], timeout=8.0)
+    # Generous timeout: yt-dlp standalone binaries self-extract on every run
+    # (onefile) and can take >10s cold on a slow disk or under Rosetta /
+    # first-run antivirus scanning — 8s misreported a working install as
+    # unavailable.
+    rc, out, err = await _run([path, "--version"], timeout=25.0)
     version = out.strip().splitlines()[0].strip() if out.strip() else None
     age = None
     if version:
@@ -316,13 +320,24 @@ async def _verify_executable(path: Path, *, min_size: int = 1_000_000) -> Option
         if head[:2] != b"MZ":
             return "not a valid Windows executable (missing MZ header)"
     else:
-        # yt-dlp on posix ships as a zipimport python archive (starts with a
-        # shebang) rather than an ELF — accept a shebang or ELF magic.
-        if not (head.startswith(b"#!") or head[:4] == b"\x7fELF"):
+        # Accepted posix formats: yt-dlp's linux asset is a zipimport python
+        # archive (shebang), yt-dlp_macos is a Mach-O binary (thin or fat/
+        # universal, either endianness), and ELF covers linux static builds.
+        _MACHO_MAGICS = (
+            b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",  # 32-bit thin
+            b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",  # 64-bit thin
+            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",  # fat / universal
+        )
+        if not (
+            head.startswith(b"#!")
+            or head[:4] == b"\x7fELF"
+            or head[:4] in _MACHO_MAGICS
+        ):
             return "not a recognised executable/script header"
 
-    # Ultimate test: does it actually run?
-    rc, out, err = await _run([str(path), "--version"], timeout=15.0)
+    # Ultimate test: does it actually run? (Cold start of a onefile binary
+    # can be slow — see _ytdlp_info.)
+    rc, out, err = await _run([str(path), "--version"], timeout=30.0)
     if rc != 0 or not out.strip():
         detail = (err or out or "no output").strip()[:200]
         return f"binary did not run: {detail}"

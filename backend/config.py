@@ -6,8 +6,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .appdirs import is_frozen, user_data_dir
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.json"
+# Source runs keep config.json next to the code (unchanged behaviour).
+# Frozen builds must not write into the install dir — an .app in
+# /Applications or a Program Files install is read-only for the user — so
+# config lives in the per-user data dir instead.
+CONFIG_PATH = (user_data_dir() / "config.json") if is_frozen() else (PROJECT_ROOT / "config.json")
 
 # Cross-platform defaults. On Windows, executables typically need ".exe" and
 # may live at well-known absolute paths. On macOS / Linux they're usually on
@@ -21,6 +27,10 @@ _DEFAULTS: dict[str, Any] = {
     "ffmpeg_path": "ffmpeg.exe" if _IS_WIN else "ffmpeg",
     "port": 8765,
     "max_concurrent_downloads": 2,
+    # First-run bootstrap: download missing yt-dlp / N_m3u8DL-RE / ffmpeg
+    # into the per-user tools dir automatically. Set false to manage tools
+    # yourself.
+    "auto_download_tools": True,
     # Extra HTTP headers applied to every probe/download. Streams behind
     # hotlink protection, private/self-hosted servers and login-gated
     # platforms typically need a Referer, a specific User-Agent or a Cookie.
