@@ -39,15 +39,22 @@ helper tools. To build the installers yourself, see
 
 ### Prerequisites
 
-You need **Python 3.10+** and three external tools on your machine:
+You need **Python 3.10+**. Three external tools do the actual downloading:
 
-| Tool | Purpose | Windows | macOS | Linux |
-|---|---|---|---|---|
-| `yt-dlp` | YouTube etc. | `winget install yt-dlp.yt-dlp` or download `yt-dlp.exe` | `brew install yt-dlp` | `pipx install yt-dlp` |
-| `N_m3u8DL-RE` | HLS downloader | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) |
-| `ffmpeg` | Muxing audio + video | `winget install Gyan.FFmpeg` | `brew install ffmpeg` | `sudo apt install ffmpeg` |
+| Tool | Purpose | Install it yourself (optional) |
+|---|---|---|
+| `yt-dlp` | YouTube etc. | `winget install yt-dlp.yt-dlp` · `brew install yt-dlp` · `pipx install yt-dlp` |
+| `N_m3u8DL-RE` | HLS downloader | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) |
+| `ffmpeg` | Muxing audio + video | `winget install Gyan.FFmpeg` · `brew install ffmpeg` · `sudo apt install ffmpeg` |
 
-If the tools are on `PATH`, you're done. Otherwise edit `config.json` (see below) with absolute paths.
+**You don't have to install any of them.** On startup the app downloads
+whatever is missing into its own data directory and points `config.json` at
+the absolute paths — a banner at the top of the page shows per-tool progress.
+Anything already on `PATH` is used as-is and never re-downloaded. Set
+`auto_download_tools` to `false` to manage the tools yourself.
+
+The one exception is **ffmpeg on Linux**, which has no reliable static-build
+source — install it with your package manager.
 
 ### Run
 
@@ -81,6 +88,7 @@ Open <http://127.0.0.1:8765> in your browser.
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
   "max_concurrent_downloads": 2,
+  "auto_download_tools": true,
   "custom_headers": {
     "Referer": "https://example.com/"
   }
@@ -88,6 +96,24 @@ Open <http://127.0.0.1:8765> in your browser.
 ```
 
 Settings are also editable from the gear icon in the UI.
+
+#### Where the app keeps its files
+
+Running from source, `config.json` stays next to the code. An installed build
+can't write to its own install directory, so it uses a per-user data directory
+instead — which is also where auto-downloaded tools and logs go:
+
+| | Data directory |
+|---|---|
+| Windows | `%LOCALAPPDATA%\VideoDownloader` |
+| macOS | `~/Library/Application Support/VideoDownloader` |
+| Linux | `$XDG_DATA_HOME/VideoDownloader` (or `~/.local/share/…`) |
+
+Set `VD_DATA_DIR` to override it — useful for a portable install, or for
+testing first-run behaviour against a clean directory.
+
+If the app seems not to start, `logs/app.log` in that directory is the first
+place to look: installed builds have no console to print to.
 
 #### Custom headers
 
@@ -174,6 +200,8 @@ Pick quality ──▶ /api/download
 backend/
   main.py                    FastAPI app + routes
   config.py                  Loads config.json with sensible defaults
+  appdirs.py                 Resource root vs. per-user data dir; frozen detection
+  bootstrap.py               First-run download of the three external tools
   models.py                  Pydantic schemas
   detector.py                Routes URLs to downloaders
   downloads_manager.py       Job queue + progress broadcast
@@ -189,6 +217,14 @@ frontend/
   style.css
   app.js                     Vanilla JS, no build step
 
+packaging/
+  launcher.py                PyInstaller entry point
+  VideoDownloader.spec       Shared Windows + macOS build spec
+  build_windows.bat          Build the Windows app + installer
+  build_macos.sh             Build the macOS .app + .dmg
+  windows/VideoDownloader.iss  Inno Setup installer script
+
+docs/INSTALL.md              End-user install guide (bilingual)
 run.bat / run.sh             Cross-platform launchers
 requirements.txt
 config.example.json

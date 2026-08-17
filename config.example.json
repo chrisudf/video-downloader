@@ -5,6 +5,7 @@
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
   "max_concurrent_downloads": 2,
+  "auto_download_tools": true,
   "custom_headers": {
     "Referer": "https://example.com/"
   }
