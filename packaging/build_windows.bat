@@ -39,7 +39,14 @@ if defined ISCC (
     if errorlevel 1 exit /b 1
 ) else (
     echo [build] Inno Setup not found - creating portable zip instead.
-    powershell -NoProfile -Command "Compress-Archive -Path 'dist\VideoDownloader\*' -DestinationPath 'dist\VideoDownloader-win64.zip' -Force"
+    REM -ErrorAction Stop + explicit exit: without them a failed archive (no
+    REM disk space, destination locked) still returns 0 and the script would
+    REM report success with no artifact produced.
+    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try { Compress-Archive -Path 'dist\VideoDownloader\*' -DestinationPath 'dist\VideoDownloader-win64.zip' -Force } catch { Write-Error $_; exit 1 }"
+    if errorlevel 1 (
+        echo [build] ERROR: failed to create dist\VideoDownloader-win64.zip
+        exit /b 1
+    )
 )
 
 echo.

@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 
 from . import tools
 from .appdirs import managed_tools_dir
-from .config import config
+from .config import JS_RUNTIME_NAMES, config, format_js_runtime, parse_js_runtime
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -86,6 +86,21 @@ _FFMPEG_MAC_URLS = {
 }
 _FFMPEG_MAC_FALLBACK = "https://evermeet.cx/ffmpeg/getrelease/zip"  # x86_64 only
 
+# deno: a JS runtime for yt-dlp's YouTube challenge solving. yt-dlp enables
+# only deno by default, so it is the runtime to install when none is present.
+# Fixed-name assets, so /releases/latest/download/ resolves without hitting
+# the rate-limited REST API.
+def _deno_asset() -> str:
+    arch = _machine_arch()
+    if IS_WIN:
+        return "deno-x86_64-pc-windows-msvc.zip"
+    if IS_MAC:
+        return "deno-aarch64-apple-darwin.zip" if arch == "arm64" else "deno-x86_64-apple-darwin.zip"
+    return (
+        "deno-aarch64-unknown-linux-gnu.zip" if arch == "arm64"
+        else "deno-x86_64-unknown-linux-gnu.zip"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Status shared with the frontend
@@ -135,7 +150,7 @@ def augment_path() -> None:
 
 
 def missing_tools() -> list[str]:
-    """Which of the three tools can't currently be resolved."""
+    """Which of the managed tools can't currently be resolved."""
     out = []
     for name, cfg_path in (
         ("ytdlp", config.ytdlp_path),
@@ -144,7 +159,31 @@ def missing_tools() -> list[str]:
     ):
         if not isinstance(cfg_path, str) or not cfg_path or shutil.which(cfg_path) is None:
             out.append(name)
+    if not _resolve_js_runtime():
+        out.append("jsruntime")
     return out
+
+
+def _resolve_js_runtime() -> Optional[str]:
+    """The JS runtime yt-dlp will be able to use, or None.
+
+    Counted as a managed tool because YouTube extraction now depends on it:
+    without a runtime the usable formats are never listed, so reporting
+    first-run setup as complete without one would leave a packaged machine
+    with YouTube quietly broken.
+    """
+    parsed = parse_js_runtime(getattr(config, "js_runtime", ""))
+    if parsed:
+        name, path = parsed
+        # A configured entry only counts if it actually resolves — a stale
+        # path left behind by an uninstall must not suppress the download.
+        if (path and Path(path).exists()) or (not path and shutil.which(name)):
+            return format_js_runtime(parsed)
+    for name in JS_RUNTIME_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -366,10 +405,41 @@ async def _install_ffmpeg() -> str:
     raise RuntimeError(f"ffmpeg download failed: {last_err}")
 
 
+async def _install_js_runtime() -> str:
+    """Install deno into the managed tools dir.
+
+    Only reached when no runtime is already resolvable, so a machine that
+    already has deno/node/bun never pays the ~40MB download.
+    """
+    binname = "deno.exe" if IS_WIN else "deno"
+    dest = managed_tools_dir() / binname
+    _step("jsruntime", "running", "下载 deno（YouTube 需要）/ downloading deno", 0)
+    url = f"https://github.com/denoland/deno/releases/latest/download/{_deno_asset()}"
+    # ignore_cleanup_errors: see _install_m3u8dl.
+    with tempfile.TemporaryDirectory(
+        dir=managed_tools_dir(), ignore_cleanup_errors=True
+    ) as td:
+        archive = Path(td) / "deno.zip"
+        await asyncio.to_thread(
+            _download_to, url, archive,
+            lambda p: _step("jsruntime", "running", "下载 deno / downloading deno", p),
+        )
+        tmp = Path(td) / binname
+        await asyncio.to_thread(_extract_member, archive, binname, tmp)
+        _make_executable(tmp)
+        if not await _run_ok([str(tmp), "--version"]):
+            raise RuntimeError("downloaded deno failed to run")
+        os.replace(tmp, dest)
+    config.update({"js_runtime": str(dest)})
+    _step("jsruntime", "done", str(dest), 100)
+    return str(dest)
+
+
 _INSTALLERS = {
     "ytdlp": _install_ytdlp,
     "m3u8dl": _install_m3u8dl,
     "ffmpeg": _install_ffmpeg,
+    "jsruntime": _install_js_runtime,
 }
 
 

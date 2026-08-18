@@ -25,12 +25,12 @@ A local web UI for downloading videos from YouTube, HLS (`.m3u8`) streams, and J
 - **Windows** — `VideoDownloader-Setup-win64.exe`，双击安装
 - **macOS** — `VideoDownloader-macos-<arch>.dmg`，拖进 Applications
 
-首次启动自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg）。
+首次启动自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg / deno）。
 自己构建安装包见 [packaging/README.md](packaging/README.md)。
 
 No Python or terminal needed — grab the installer and follow
-[docs/INSTALL.md](docs/INSTALL.md). First launch auto-downloads the three
-helper tools. To build the installers yourself, see
+[docs/INSTALL.md](docs/INSTALL.md). First launch auto-downloads the helper
+tools it needs. To build the installers yourself, see
 [packaging/README.md](packaging/README.md).
 
 ---
@@ -39,13 +39,14 @@ helper tools. To build the installers yourself, see
 
 ### Prerequisites
 
-You need **Python 3.10+**. Three external tools do the actual downloading:
+You need **Python 3.10+**. Four external tools do the actual work:
 
 | Tool | Purpose | Install it yourself (optional) |
 |---|---|---|
 | `yt-dlp` | YouTube etc. | `winget install yt-dlp.yt-dlp` · `brew install yt-dlp` · `pipx install yt-dlp` |
 | `N_m3u8DL-RE` | HLS downloader | [Release binary](https://github.com/nilaoda/N_m3u8DL-RE/releases) |
 | `ffmpeg` | Muxing audio + video | `winget install Gyan.FFmpeg` · `brew install ffmpeg` · `sudo apt install ffmpeg` |
+| `deno` | JS runtime for YouTube | `winget install DenoLand.Deno` · `brew install deno` — `node` or `bun` work too |
 
 **You don't have to install any of them.** On startup the app downloads
 whatever is missing into its own data directory and points `config.json` at
@@ -89,6 +90,8 @@ Open <http://127.0.0.1:8765> in your browser.
   "port": 8765,
   "max_concurrent_downloads": 2,
   "auto_download_tools": true,
+  "youtube_player_client": "web",
+  "js_runtime": "",
   "custom_headers": {
     "Referer": "https://example.com/"
   }
@@ -96,6 +99,21 @@ Open <http://127.0.0.1:8765> in your browser.
 ```
 
 Settings are also editable from the gear icon in the UI.
+
+#### YouTube extraction
+
+`youtube_player_client` pins which YouTube client yt-dlp identifies as, and
+`js_runtime` names the JavaScript runtime it uses to solve YouTube's
+challenges. Both exist because yt-dlp's defaults currently fail here: the
+default client selection resolves to one whose media URLs answer **HTTP 403**,
+and a pinned client only exposes usable formats when a JS runtime is present.
+
+- `youtube_player_client` — `web` by default. Try `tv` or `web_safari` if a
+  particular video fails. Empty string restores yt-dlp's own default, for
+  when upstream fixes this and the override becomes noise.
+- `js_runtime` — empty auto-detects `deno` → `node` → `bun` on `PATH`, and
+  first-run bootstrap installs deno if none is found. Accepts a bare name
+  (`deno`), a path to the executable, or yt-dlp's own `name:path` spelling.
 
 #### Where the app keeps its files
 
@@ -201,7 +219,7 @@ backend/
   main.py                    FastAPI app + routes
   config.py                  Loads config.json with sensible defaults
   appdirs.py                 Resource root vs. per-user data dir; frozen detection
-  bootstrap.py               First-run download of the three external tools
+  bootstrap.py               First-run download of the external tools
   models.py                  Pydantic schemas
   detector.py                Routes URLs to downloaders
   downloads_manager.py       Job queue + progress broadcast

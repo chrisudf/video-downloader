@@ -670,7 +670,12 @@ const bootstrapSteps = $("bootstrap-steps");
 const bootstrapBtn = $("bootstrap-btn");
 let bootstrapTimer = null;
 
-const TOOL_LABELS = { ytdlp: "yt-dlp", m3u8dl: "N_m3u8DL-RE", ffmpeg: "ffmpeg" };
+const TOOL_LABELS = {
+  ytdlp: "yt-dlp",
+  m3u8dl: "N_m3u8DL-RE",
+  ffmpeg: "ffmpeg",
+  jsruntime: "deno (YouTube 所需)",
+};
 
 function renderBootstrap(st) {
   const missing = st.missing || [];
@@ -690,7 +695,7 @@ function renderBootstrap(st) {
 
   bootstrapBanner.classList.remove("hidden");
   if (running) {
-    bootstrapMessage.textContent = "首次启动：正在自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg）…";
+    bootstrapMessage.textContent = "首次启动：正在自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg / deno）…";
     bootstrapBtn.classList.add("hidden");
   } else if (st.state === "error") {
     bootstrapMessage.textContent = "✗ 部分组件下载失败（可重试，或在 ⚙ 设置里手动填工具路径）";

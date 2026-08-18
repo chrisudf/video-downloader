@@ -9,7 +9,13 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 
 from .. import tools
-from ..config import config, normalize_headers
+from ..config import (
+    JS_RUNTIME_NAMES,
+    config,
+    format_js_runtime,
+    normalize_headers,
+    parse_js_runtime,
+)
 from ..models import DownloadRequest, FormatOption, InspectResult
 from .base import BaseDownloader, ProgressCallback, ProgressEvent
 from .registry import register
@@ -52,19 +58,23 @@ def _header_args(headers: dict[str, str]) -> list[str]:
     return args
 
 
-_JS_RUNTIMES = ("deno", "node", "bun")
-
-
 def _detect_js_runtime() -> Optional[str]:
-    """First JS runtime found on PATH, or None.
+    """A --js-runtimes argument value, or None.
 
     yt-dlp enables only deno by default, so node/bun have to be named
-    explicitly via --js-runtimes even when they are installed.
+    explicitly even when they are installed.
+
+    The configured value is normalised rather than passed through: the flag
+    takes RUNTIME[:PATH], so a plain "/usr/bin/node" would be read as the
+    name of an unsupported runtime. parse_js_runtime recovers the name from
+    the filename and format_js_runtime renders it back in the form yt-dlp
+    accepts. An unrecognisable value falls through to auto-detection instead
+    of being passed on to be rejected.
     """
-    configured = str(getattr(config, "js_runtime", "") or "").strip()
-    if configured:
-        return configured
-    for name in _JS_RUNTIMES:
+    parsed = parse_js_runtime(getattr(config, "js_runtime", ""))
+    if parsed:
+        return format_js_runtime(parsed)
+    for name in JS_RUNTIME_NAMES:
         if shutil.which(name):
             return name
     return None

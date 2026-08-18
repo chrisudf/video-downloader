@@ -6,6 +6,8 @@
   "port": 8765,
   "max_concurrent_downloads": 2,
   "auto_download_tools": true,
+  "youtube_player_client": "web",
+  "js_runtime": "",
   "custom_headers": {
     "Referer": "https://example.com/"
   }

@@ -14,13 +14,13 @@ For non-technical users. No Python, no terminal.
 3. 一路下一步。安装到你自己的用户目录，不需要管理员权限。
 4. 完成后自动启动，浏览器会打开 `http://127.0.0.1:8765` 的操作界面。
 
-首次启动会自动下载三个必需组件（yt-dlp / N_m3u8DL-RE / ffmpeg，约 100 MB），
+首次启动会自动下载必需组件（yt-dlp / N_m3u8DL-RE / ffmpeg，以及 YouTube 需要的 JS 运行时 deno，约 140 MB），
 页面顶部有进度条。下载完成前无法开始下载视频。
 
 **First launch on Windows**: SmartScreen will warn because the installer is
 not code-signed. Click **More info → Run anyway**. The app installs per-user
-(no admin rights) and auto-downloads its three helper tools (~100 MB) on
-first start — progress is shown at the top of the page.
+(no admin rights) and auto-downloads its helper tools — including the deno
+JS runtime YouTube extraction now requires (~140 MB total) — on first start — progress is shown at the top of the page.
 
 ## macOS
 
@@ -31,7 +31,7 @@ first start — progress is shown at the top of the page.
 3. **首次打开必须：右键（或按住 Control 点击）图标 → 打开 → 再点"打开"**。
    直接双击会提示"无法打开，因为无法验证开发者"——这是因为 App 未经 Apple 公证，
    右键打开是 Apple 官方提供的绕过方式，只需要做一次。
-4. 浏览器会自动打开操作界面。首次启动同样会自动下载三个组件。
+4. 浏览器会自动打开操作界面。首次启动同样会自动下载所需组件。
 
 **First launch on macOS**: the app is not notarized, so double-clicking is
 blocked. **Right-click the app → Open → Open** (needed once only). If macOS
@@ -55,7 +55,7 @@ macOS 在 `~/Library/Application Support/VideoDownloader/logs/app.log`。
 
 **组件自动下载失败？**
 点横幅上的"重试下载"。仍失败多半是网络问题（GitHub 访问受限时可挂代理再试），
-或在 ⚙ 设置里手动填三个工具的路径。
+或在 ⚙ 设置里手动填工具路径。
 
 **杀毒软件报警？**
 误报常见于未签名的 PyInstaller 程序。代码开源可查。添加信任即可。

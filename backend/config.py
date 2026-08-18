@@ -4,7 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .appdirs import is_frozen, user_data_dir
 
@@ -42,10 +42,13 @@ _DEFAULTS: dict[str, Any] = {
     # selector then matches a format from a client that cannot serve it.
     # Needs re-testing from a clean IP before being treated as settled.
     "youtube_player_client": "web",
-    # Path to (or bare name of) a JavaScript runtime for yt-dlp's YouTube
-    # challenge solving. Empty = auto-detect deno/node/bun on PATH. yt-dlp
-    # only enables deno by default, so a machine with just node needs this
-    # passed explicitly or the good formats are never offered.
+    # JavaScript runtime for yt-dlp's YouTube challenge solving. yt-dlp only
+    # enables deno by default, so a machine with just node needs this named
+    # explicitly or the good formats are never offered.
+    #
+    # Accepts a bare name ("deno"), an absolute path to the executable, or
+    # yt-dlp's own "name:path" spelling. Empty = auto-detect deno/node/bun on
+    # PATH, and let first-run bootstrap install deno if none is found.
     "js_runtime": "",
     # Extra HTTP headers applied to every probe/download. Streams behind
     # hotlink protection, private/self-hosted servers and login-gated
@@ -149,3 +152,49 @@ def load_config() -> Config:
 
 
 config = load_config()
+
+
+JS_RUNTIME_NAMES = ("deno", "node", "bun")
+
+
+def parse_js_runtime(value: Any) -> Optional[tuple[str, Optional[str]]]:
+    """Interpret the js_runtime setting as (runtime_name, explicit_path).
+
+    Three accepted spellings, because all three are things a user will
+    plausibly type:
+
+        "deno"                     -> ("deno", None)
+        "C:/Program Files/nodejs/node.exe" -> ("node", "C:/.../node.exe")
+        "node:/usr/bin/node"       -> ("node", "/usr/bin/node")
+
+    A bare path cannot be handed to yt-dlp as-is: --js-runtimes takes
+    RUNTIME[:PATH], so "/usr/bin/node" would be read as the name of an
+    unsupported runtime. The name is recovered from the filename instead.
+
+    Returns None when empty or when the runtime can't be identified — the
+    caller then falls back to auto-detection rather than passing yt-dlp a
+    flag it will reject.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    # "name:path" — checked first and anchored to a known name, so a bare
+    # Windows path keeps its drive-letter colon instead of being split on it.
+    for name in JS_RUNTIME_NAMES:
+        prefix = f"{name}:"
+        if text.lower().startswith(prefix):
+            path = text[len(prefix):].strip()
+            return (name, path or None)
+    if text.lower() in JS_RUNTIME_NAMES:
+        return (text.lower(), None)
+    # Otherwise treat it as a path and recover the runtime from the filename.
+    stem = Path(text).stem.lower()
+    if stem in JS_RUNTIME_NAMES:
+        return (stem, text)
+    return None
+
+
+def format_js_runtime(parsed: tuple[str, Optional[str]]) -> str:
+    """Render (name, path) back into yt-dlp's --js-runtimes argument."""
+    name, path = parsed
+    return f"{name}:{path}" if path else name
