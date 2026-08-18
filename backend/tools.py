@@ -434,12 +434,20 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
 
 
 def stale_hint(age_days: Optional[int], threshold: int = 30) -> Optional[str]:
-    """Return a one-line hint if yt-dlp is older than `threshold` days."""
+    """Return a one-line hint if yt-dlp is older than `threshold` days.
+
+    Deliberately hedged: age is measured against the installed build's date,
+    not against what upstream currently offers, so a "45 days old" yt-dlp is
+    often already the newest release there is. Telling the user to update in
+    that situation sends them to a button that reports "up to date" and
+    leaves them thinking the real cause has been ruled out.
+    """
     if age_days is None:
         return None
     if age_days <= threshold:
         return None
     return (
-        f"Your yt-dlp is {age_days} days old — YouTube ships anti-bot changes "
-        f"faster than that. Open Settings ⚙ → click 'Update yt-dlp'."
+        f"Your yt-dlp build is {age_days} days old — if a newer one exists, "
+        f"Settings ⚙ → 'Update yt-dlp' is worth trying first. If it reports "
+        f"'up to date', the cause is elsewhere."
     )

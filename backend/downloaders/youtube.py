@@ -6,6 +6,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from .. import tools
 from ..config import config, normalize_headers
@@ -15,11 +16,14 @@ from .registry import register
 
 # We shell out to the user's yt-dlp.exe for BOTH probe and download. Rationale:
 # YouTube's anti-bot machinery (n-challenge, PO tokens, "confirm you're not a
-# bot") is a moving target the yt-dlp team patches constantly. A standalone
-# yt-dlp.exe binary ships with a bundled JS runtime and updates as one blob;
-# the pip package requires an external JS runtime (deno) and often breaks
-# between releases. Using the exe for probe too means both paths share the
-# same reliability characteristics.
+# bot") is a moving target the yt-dlp team patches constantly. The standalone
+# binary updates as one blob and is the configuration upstream tests against.
+# Using the exe for probe too means both paths share the same reliability
+# characteristics — and, critically, the same _youtube_args() below, so the
+# formats we offer are the formats we can actually fetch.
+#
+# Note the exe does NOT bundle a JS runtime: yt-dlp deprecated JS-runtime-less
+# YouTube extraction, and without one the good formats are never listed.
 #
 # The pip-installed `yt_dlp` module is imported lazily only as a last-resort
 # fallback for environments that have no exe on disk.
@@ -48,6 +52,66 @@ def _header_args(headers: dict[str, str]) -> list[str]:
     return args
 
 
+_JS_RUNTIMES = ("deno", "node", "bun")
+
+
+def _detect_js_runtime() -> Optional[str]:
+    """First JS runtime found on PATH, or None.
+
+    yt-dlp enables only deno by default, so node/bun have to be named
+    explicitly via --js-runtimes even when they are installed.
+    """
+    configured = str(getattr(config, "js_runtime", "") or "").strip()
+    if configured:
+        return configured
+    for name in _JS_RUNTIMES:
+        if shutil.which(name):
+            return name
+    return None
+
+
+_YT_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+
+
+def _is_youtube(url: str) -> bool:
+    """Host-based, not substring-based: a bare "youtube.com/..." has no dot
+    before the host, and "evil-youtube.com" must not match."""
+    host = urlsplit(url if "//" in url else f"//{url}").hostname or ""
+    host = host.lower()
+    return any(host == h or host.endswith(f".{h}") for h in _YT_HOSTS)
+
+
+def _youtube_args(url: str) -> list[str]:
+    """Flags that keep YouTube downloads working, shared by probe and download.
+
+    Two independent breakages, both of which must be worked around or the
+    download dies with "HTTP Error 403: Forbidden" partway through:
+
+    - yt-dlp's default client selection currently lands on clients whose media
+      URLs 403. Pinning the client fixes it; verified that the default fails
+      and web_safari/web/tv succeed on the same video.
+    - Those clients only expose the good formats when a JS runtime is present,
+      otherwise extraction reports "Requested format is not available".
+
+    Both are YouTube-specific and both are moving targets, so both are
+    overridable from config rather than hard-coded.
+
+    MUST be applied identically to probe and download: the probe's format ids
+    come from whichever client answered, and a download using a different
+    client would be asked for an id that client never offered.
+    """
+    args: list[str] = []
+    if not _is_youtube(url):
+        return args
+    client = str(getattr(config, "youtube_player_client", "") or "").strip()
+    if client:
+        args += ["--extractor-args", f"youtube:player_client={client}"]
+    runtime = _detect_js_runtime()
+    if runtime:
+        args += ["--js-runtimes", runtime]
+    return args
+
+
 async def _probe_via_exe(url: str) -> dict[str, Any]:
     """Ask yt-dlp.exe for metadata as JSON. Preferred path — the bundled
     JS runtime handles YouTube's current n-challenge / bot check better
@@ -66,6 +130,7 @@ async def _probe_via_exe(url: str) -> dict[str, Any]:
     # metadata behind a Cookie/Referer fails here before the user ever gets a
     # format list.
     args += _header_args(config.headers())
+    args += _youtube_args(url)
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
@@ -216,6 +281,8 @@ class YouTubeDownloader(BaseDownloader):
             **normalize_headers(config.headers()),
             **normalize_headers(request.headers),
         })
+        # Same client/runtime the probe used — see _youtube_args.
+        args += _youtube_args(request.url)
 
         proc = await asyncio.create_subprocess_exec(
             *args,
