@@ -31,6 +31,22 @@ _DEFAULTS: dict[str, Any] = {
     # into the per-user tools dir automatically. Set false to manage tools
     # yourself.
     "auto_download_tools": True,
+    # YouTube only. yt-dlp's default client selection currently resolves to
+    # formats that answer 403 on the media URL; pinning the client avoids it.
+    # Empty string = yt-dlp's own default, for when upstream fixes this and
+    # the override becomes noise.
+    #
+    # PROVISIONAL. "web" is the one value observed working on every video
+    # tested before YouTube rate-limited the test machine. Listing several
+    # clients did worse, not better: yt-dlp merges their format lists, and a
+    # selector then matches a format from a client that cannot serve it.
+    # Needs re-testing from a clean IP before being treated as settled.
+    "youtube_player_client": "web",
+    # Path to (or bare name of) a JavaScript runtime for yt-dlp's YouTube
+    # challenge solving. Empty = auto-detect deno/node/bun on PATH. yt-dlp
+    # only enables deno by default, so a machine with just node needs this
+    # passed explicitly or the good formats are never offered.
+    "js_runtime": "",
     # Extra HTTP headers applied to every probe/download. Streams behind
     # hotlink protection, private/self-hosted servers and login-gated
     # platforms typically need a Referer, a specific User-Agent or a Cookie.
