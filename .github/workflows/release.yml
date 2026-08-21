@@ -23,14 +23,23 @@ on:
         required: true
         type: string
 
+# Least privilege by default. Only the release job writes anything; the build
+# jobs run third-party actions and package managers, and checkout leaves the
+# token on disk, so they get read-only.
 permissions:
-  contents: write # create the release / upload assets
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      # Build what the tag names. Without an explicit ref, a
+      # workflow_dispatch run checks out the selected branch while the
+      # release job attaches the result to `inputs.tag` — publishing assets
+      # built from different code than the tag they ship under.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -56,7 +65,13 @@ jobs:
   build-macos:
     runs-on: macos-15 # Apple Silicon -> arm64 DMG (macos-14 retires 2026-11)
     steps:
+      # Build what the tag names. Without an explicit ref, a
+      # workflow_dispatch run checks out the selected branch while the
+      # release job attaches the result to `inputs.tag` — publishing assets
+      # built from different code than the tag they ship under.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -73,6 +88,8 @@ jobs:
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release / upload assets
     steps:
       - uses: actions/download-artifact@v7
         with:
