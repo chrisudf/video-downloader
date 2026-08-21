@@ -90,7 +90,7 @@ Open <http://127.0.0.1:8765> in your browser.
   "port": 8765,
   "max_concurrent_downloads": 2,
   "auto_download_tools": true,
-  "youtube_player_client": "web",
+  "youtube_player_client": "",
   "js_runtime": "",
   "custom_headers": {
     "Referer": "https://example.com/"
@@ -102,15 +102,20 @@ Settings are also editable from the gear icon in the UI.
 
 #### YouTube extraction
 
-`youtube_player_client` pins which YouTube client yt-dlp identifies as, and
-`js_runtime` names the JavaScript runtime it uses to solve YouTube's
-challenges. Both exist because yt-dlp's defaults currently fail here: the
-default client selection resolves to one whose media URLs answer **HTTP 403**,
-and a pinned client only exposes usable formats when a JS runtime is present.
+YouTube extraction needs two things beyond yt-dlp itself, and the app manages
+both: a **JS runtime** (yt-dlp's challenge solving; without one the usable
+formats are never listed) and a **fresh-enough yt-dlp** (the app installs and
+updates along yt-dlp's *nightly* channel — the stable channel lags YouTube's
+weekly enforcement changes by a month or more, and a month-old stable was
+observed failing every real download with HTTP 403 while the same day's
+nightly succeeded).
 
-- `youtube_player_client` — `web` by default. Try `tv` or `web_safari` if a
-  particular video fails. Empty string restores yt-dlp's own default, for
-  when upstream fixes this and the override becomes noise.
+- `youtube_player_client` — empty by default = yt-dlp's own client selection,
+  which is correct when the binary is a current nightly. If downloads on your
+  network still fail with 403 or "no formats", try `web`, `web_safari` or
+  `tv` (one value, not several: yt-dlp merges format lists across listed
+  clients, and a selector then matches a format from a client that cannot
+  serve it — which client works is network-dependent, so test on yours).
 - `js_runtime` — empty auto-detects `deno` → `node` → `bun` on `PATH`, and
   first-run bootstrap installs deno if none is found. Accepts a bare name
   (`deno`), a path to the executable, or yt-dlp's own `name:path` spelling.

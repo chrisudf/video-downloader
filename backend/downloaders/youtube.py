@@ -145,6 +145,7 @@ async def _probe_via_exe(url: str) -> dict[str, Any]:
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **tools.SPAWN_KWARGS,  # no console window from the packaged GUI build
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0 or not stdout:
@@ -298,6 +299,7 @@ class YouTubeDownloader(BaseDownloader):
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **tools.SPAWN_KWARGS,  # no console window from the packaged GUI build
         )
         assert proc.stdout is not None
 

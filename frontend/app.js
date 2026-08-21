@@ -485,6 +485,18 @@ $("settings-btn").addEventListener("click", async () => {
 
 $("settings-cancel").addEventListener("click", () => settingsDialog.close());
 
+// The packaged app has no window/tray — this is the only quit affordance.
+$("quit-app-btn").addEventListener("click", async () => {
+  if (!confirm("退出程序？正在进行的下载会被取消。")) return;
+  try {
+    await api("/api/shutdown", { method: "POST" });
+  } catch {
+    // Server already gone — that's what we wanted.
+  }
+  document.body.innerHTML =
+    '<div style="padding:48px;text-align:center;color:#8a93a3">程序已退出，可以关闭此页面。<br>再次使用请重新打开 Video Downloader。</div>';
+});
+
 // ===== Tool versions =====
 let lastToolVersions = null;
 
@@ -722,6 +734,7 @@ function renderBootstrap(st) {
 }
 
 let bootstrapPollSeq = 0;
+let bootstrapPollFailures = 0;
 
 async function pollBootstrap() {
   // Sequence guard: a manual retry can start a new loop while a previous
@@ -736,8 +749,15 @@ async function pollBootstrap() {
   try {
     st = await api("/api/tools/bootstrap/status");
   } catch {
-    return; // server not ready yet; init retry loop handles it
+    // Transient failure (server still starting, sleep/wake mid-download):
+    // keep polling instead of freezing the banner forever. Bounded so an old
+    // backend without this endpoint doesn't get hammered indefinitely.
+    if (seq === bootstrapPollSeq && ++bootstrapPollFailures <= 100) {
+      bootstrapTimer = setTimeout(pollBootstrap, 3000);
+    }
+    return;
   }
+  bootstrapPollFailures = 0;
   if (seq !== bootstrapPollSeq) return; // superseded by a newer loop
   renderBootstrap(st);
   if (st.state === "running") {

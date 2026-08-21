@@ -94,8 +94,10 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "Video Downloader",
             "CFBundleShortVersionString": "0.2.0",
             "NSHighResolutionCapable": True,
-            # The app has no windows of its own (UI is the browser tab), but
-            # keep it in the Dock so users can see it's running and quit it.
-            "LSUIElement": False,
+            # Background app, no Dock icon: the binary has no NSApplication
+            # event loop, so a Dock presence would just bounce, show "not
+            # responding" and ignore Dock-Quit. The UI (browser tab) has a
+            # quit button (/api/shutdown) instead.
+            "LSUIElement": True,
         },
     )

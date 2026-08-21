@@ -27,6 +27,10 @@ OutputBaseFilename=VideoDownloader-Setup-win64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; The app is a windowless background server — there is no window to receive a
+; polite close request, so force-terminate it via Restart Manager before
+; replacing files on upgrade.
+CloseApplications=force
 ; "x64" (not the newer "x64compatible") so the script compiles on the still
 ; widespread Inno Setup 6.0-6.2; 6.3+ accepts it too (with a deprecation
 ; warning). The PyInstaller output is x64-only anyway.
@@ -40,6 +44,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; A PyInstaller onedir tree must never be overlaid: files renamed or removed
+; between builds (python DLL bumps, dependency upgrades, stale dist-info)
+; would linger and break imports after an upgrade. Clear it first — the
+; per-user data in %LOCALAPPDATA%\VideoDownloader is outside {app} and safe.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "..\..\dist\VideoDownloader\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
@@ -49,3 +60,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; The server has no window; make sure uninstall can delete the exe even while
+; it is running.
+Filename: "{cmd}"; Parameters: "/C taskkill /f /im {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillServer"

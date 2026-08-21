@@ -28,15 +28,26 @@ JS runtime YouTube extraction now requires (~140 MB total) — on first start �
    `VideoDownloader-macos-x86_64.dmg`（旧 Intel 机型），双击打开。
    > 不确定是哪种？点屏幕左上角  → 关于本机：「芯片 Apple M…」选 arm64，「处理器 Intel…」选 x86_64。
 2. 把 `VideoDownloader` 拖进 `Applications` 文件夹。
-3. **首次打开必须：右键（或按住 Control 点击）图标 → 打开 → 再点"打开"**。
-   直接双击会提示"无法打开，因为无法验证开发者"——这是因为 App 未经 Apple 公证，
-   右键打开是 Apple 官方提供的绕过方式，只需要做一次。
-4. 浏览器会自动打开操作界面。首次启动同样会自动下载所需组件。
+3. **首次打开（只需做一次）**：App 未经 Apple 公证，系统会拦截。按提示文案处理：
+   - 提示 **"已损坏，无法打开"**（浏览器下载的最常见情况）：打开 终端
+     （启动台搜 "终端" / "Terminal"），把下面整行粘贴进去回车，然后正常双击打开。
+     这是唯一一次需要用到终端：
 
-**First launch on macOS**: the app is not notarized, so double-clicking is
-blocked. **Right-click the app → Open → Open** (needed once only). If macOS
-still refuses（新版系统可能需要）: 打开 系统设置 → 隐私与安全性，页面底部会出现
-"仍要打开 / Open Anyway" 按钮。
+     ```
+     xattr -d com.apple.quarantine /Applications/VideoDownloader.app
+     ```
+   - 提示 **"无法验证开发者"**（较老系统）：右键（按住 Control 点击）图标 → 打开 →
+     再点"打开"；或 系统设置 → 隐私与安全性 → 底部点 "仍要打开"。
+4. 浏览器会自动打开操作界面。首次启动同样会自动下载所需组件。
+   注意：程序在后台运行，**不占 Dock 图标**；要退出请在界面右上 ⚙ 设置里点"退出程序"。
+
+**First launch on macOS** (once only): the app is not notarized. If macOS says
+the app **"is damaged"** (the usual verdict for a browser-downloaded copy),
+run `xattr -d com.apple.quarantine /Applications/VideoDownloader.app` in
+Terminal, then open normally — this is the only step that ever needs a
+terminal. On older systems that instead say "unidentified developer",
+right-click → Open → Open works. The app runs in the background with no Dock
+icon; quit it from the ⚙ Settings dialog in the web UI.
 
 ## 用法 / Usage
 
@@ -48,10 +59,15 @@ Paste a URL → Inspect → pick a quality → Download. Files land in
 
 ## 常见问题 / FAQ
 
-**页面打不开 / 图标点了没反应？**
-再点一次图标——如果程序已在运行，会直接再打开一个浏览器页。
-Windows 日志在 `%LOCALAPPDATA%\VideoDownloader\logs\app.log`，
+**页面关掉了 / 图标点了没反应？**
+- Windows：再点一次图标——程序已在运行时会直接再开一个浏览器页。
+- macOS：在浏览器地址栏输入 `http://127.0.0.1:8765` 即可回到界面
+  （macOS 不会为已运行的程序开新页）。
+仍不行就看日志：Windows 在 `%LOCALAPPDATA%\VideoDownloader\logs\app.log`，
 macOS 在 `~/Library/Application Support/VideoDownloader/logs/app.log`。
+
+**怎么退出程序？**
+界面 ⚙ 设置里点"退出程序"。Windows 升级/卸载时安装器也会自动停掉它。
 
 **组件自动下载失败？**
 点横幅上的"重试下载"。仍失败多半是网络问题（GitHub 访问受限时可挂代理再试），

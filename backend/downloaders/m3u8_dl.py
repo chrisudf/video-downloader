@@ -372,6 +372,7 @@ class M3U8Downloader(BaseDownloader):
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **tools.SPAWN_KWARGS,  # no console window from the packaged GUI build
         )
 
         log_tail: list[str] = []

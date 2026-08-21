@@ -3,8 +3,11 @@
 #   ./packaging/build_macos.sh
 # Output: dist/VideoDownloader.app and dist/VideoDownloader-macos-<arch>.dmg
 #
-# The DMG is unsigned/un-notarized (no Apple Developer account wired in), so
-# first launch needs right-click -> Open. See docs/INSTALL.md.
+# The DMG is unsigned/un-notarized (no Apple Developer account wired in).
+# A browser-downloaded copy gets quarantined and Gatekeeper reports an
+# ad-hoc-signed quarantined app as "damaged" — the unblock is
+# `xattr -d com.apple.quarantine`, documented in docs/INSTALL.md. Removing
+# the caveat entirely requires Developer ID signing + notarization.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -34,7 +37,10 @@ fi
 echo "[build] ad-hoc codesigning..."
 codesign --force --deep --sign - "$APP"
 
-ARCH="$(uname -m)"
+# Arch of the binary actually built, not the host kernel — under Rosetta
+# (x86_64 python on an M-series Mac) uname -m still says arm64 and would
+# mislabel the DMG.
+ARCH="$("$VENV/bin/python" -c 'import platform; print(platform.machine())')"
 DMG="dist/VideoDownloader-macos-${ARCH}.dmg"
 echo "[build] creating ${DMG}..."
 STAGE="$(mktemp -d)"

@@ -14,23 +14,34 @@ multiprocessing.freeze_support()
 
 
 def _redirect_std_streams() -> None:
-    """Windowed (no-console) builds have no usable stdout/stderr. Anything
-    that writes to them — our prints, uvicorn's log handlers — would crash
-    with AttributeError on None. Route both to a logfile instead, which is
-    also where users can look when 'nothing happened'."""
+    """Frozen builds have no useful stdout/stderr unless run from a terminal.
+    Windows windowed builds get None streams (writes would crash with
+    AttributeError); a Finder-launched macOS .app gets real fds pointing at
+    /dev/null (writes silently vanish, and the app.log the install guide
+    points users at would never exist). Route both cases to the logfile;
+    leave real terminals (VD_CONSOLE debug builds, manual runs) alone."""
     if not getattr(sys, "frozen", False):
         return
-    if sys.stdout is not None and sys.stderr is not None:
+
+    def _dead(stream) -> bool:
+        if stream is None:
+            return True
+        try:
+            return not stream.isatty()
+        except Exception:  # noqa: BLE001 — a broken stream is a dead stream
+            return True
+
+    if not (_dead(sys.stdout) or _dead(sys.stderr)):
         return
     from backend.appdirs import logs_dir
 
     log_path = logs_dir() / "app.log"
     # Line-buffered append; survive a crashed previous run's partial line.
-    stream = open(log_path, "a", buffering=1, encoding="utf-8", errors="replace")
-    if sys.stdout is None:
-        sys.stdout = stream
-    if sys.stderr is None:
-        sys.stderr = stream
+    log = open(log_path, "a", buffering=1, encoding="utf-8", errors="replace")
+    if _dead(sys.stdout):
+        sys.stdout = log
+    if _dead(sys.stderr):
+        sys.stderr = log
 
 
 _redirect_std_streams()

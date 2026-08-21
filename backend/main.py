@@ -96,6 +96,27 @@ async def relocate_ytdlp(payload: Optional[dict[str, Any]] = None) -> dict[str, 
     return await tools.relocate_ytdlp(destination=dest)
 
 
+@app.post("/api/shutdown")
+async def shutdown() -> dict[str, Any]:
+    """Quit the app. The packaged build has no window, tray icon or console,
+    so this button in the web UI is the only way a non-developer can stop
+    the server (short of the OS task manager)."""
+    import os
+
+    for job in manager.list():
+        if job.status in ("queued", "running"):
+            manager.cancel(job.job_id)
+
+    async def _exit() -> None:
+        # Give the HTTP response time to flush and cancelled subprocesses
+        # time to receive their terminate signal.
+        await asyncio.sleep(0.6)
+        os._exit(0)
+
+    asyncio.create_task(_exit())
+    return {"stopping": True}
+
+
 @app.get("/api/tools/bootstrap/status")
 async def bootstrap_status() -> dict[str, Any]:
     return bootstrap.get_status()

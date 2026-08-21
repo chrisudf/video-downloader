@@ -31,17 +31,17 @@ _DEFAULTS: dict[str, Any] = {
     # into the per-user tools dir automatically. Set false to manage tools
     # yourself.
     "auto_download_tools": True,
-    # YouTube only. yt-dlp's default client selection currently resolves to
-    # formats that answer 403 on the media URL; pinning the client avoids it.
-    # Empty string = yt-dlp's own default, for when upstream fixes this and
-    # the override becomes noise.
-    #
-    # PROVISIONAL. "web" is the one value observed working on every video
-    # tested before YouTube rate-limited the test machine. Listing several
-    # clients did worse, not better: yt-dlp merges their format lists, and a
-    # selector then matches a format from a client that cannot serve it.
-    # Needs re-testing from a clean IP before being treated as settled.
-    "youtube_player_client": "web",
+    # YouTube only. Empty string = yt-dlp's own client selection, which is
+    # the right default now that the app installs a nightly yt-dlp and a JS
+    # runtime (both of which the defaults assume). Kept as a knob because
+    # client viability is a moving, per-network target: the clean-IP re-test
+    # the previous "web" default asked for showed the opposite result there
+    # ("web" returned zero formats, the default worked) — no pinned value is
+    # right everywhere. Values worth trying on a failing network: "web",
+    # "web_safari", "tv". Don't list several: yt-dlp merges their format
+    # lists and a selector then matches a format from a client that cannot
+    # serve it.
+    "youtube_player_client": "",
     # JavaScript runtime for yt-dlp's YouTube challenge solving. yt-dlp only
     # enables deno by default, so a machine with just node needs this named
     # explicitly or the good formats are never offered.
@@ -131,7 +131,17 @@ class Config:
         return dict(self._data)
 
     def save(self) -> None:
-        CONFIG_PATH.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+        # Atomic write: the frozen app rewrites config repeatedly (bootstrap
+        # writes the tool paths, every settings save writes again). A crash
+        # or power loss mid-write must never leave a truncated file — a
+        # corrupt config.json would otherwise fail json.loads at import time
+        # on every subsequent launch.
+        import os
+        import uuid
+
+        tmp = CONFIG_PATH.with_name(f"{CONFIG_PATH.name}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+        os.replace(tmp, CONFIG_PATH)
 
     def update(self, patch: dict[str, Any]) -> None:
         patch = dict(patch)
@@ -144,10 +154,21 @@ class Config:
 
 
 def load_config() -> Config:
+    data: dict[str, Any] = {}
     if CONFIG_PATH.exists():
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    else:
-        data = {}
+        try:
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("config.json is not a JSON object")
+        except (ValueError, OSError):
+            # A corrupt config must degrade to defaults, never prevent
+            # startup (in the windowed build the crash would be invisible).
+            # Keep the evidence aside for debugging.
+            try:
+                CONFIG_PATH.replace(CONFIG_PATH.with_suffix(".json.bad"))
+            except OSError:
+                pass
+            data = {}
     return Config(data)
 
 

@@ -5,11 +5,22 @@ from __future__ import annotations
 
 import asyncio
 import re
+import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
 from .config import config
+
+# Extra kwargs for every external-tool spawn. In the packaged Windows build
+# the parent is a GUI-subsystem process (console=False), and spawning a
+# console-subsystem child (yt-dlp.exe / ffmpeg.exe / N_m3u8DL-RE.exe) without
+# this makes Windows allocate a visible console window per invocation — and
+# closing that mystery window kills the download attached to it.
+SPAWN_KWARGS: dict[str, Any] = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+)
 
 
 # yt-dlp uses YYYY.MM.DD version strings (e.g. "2026.03.17").
@@ -29,6 +40,7 @@ async def _run(cmd: list[str], timeout: float = 8.0) -> tuple[int, str, str]:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **SPAWN_KWARGS,
         )
     except FileNotFoundError:
         return -1, "", "file not found"
@@ -167,6 +179,16 @@ _YTDLP_RELEASE_ASSETS = {
     "darwin": "yt-dlp_macos",
 }
 
+# Nightly, not stable. YouTube-side enforcement changes land weekly and the
+# stable channel lags them by a month or more: verified 2026-08-19 that
+# stable 2026.07.04 fails every real YouTube download (media URL 403 on the
+# default client, zero formats on web/web_safari, "page needs to be reloaded"
+# on tv — with a JS runtime present) while that day's nightly succeeds with
+# yt-dlp's own default client selection. Nightly is also what upstream tells
+# YouTube-breakage reporters to use. A nightly binary's own -U updates along
+# the nightly channel, so installs keep tracking it automatically.
+_YTDLP_DOWNLOAD_REPO = "yt-dlp/yt-dlp-nightly-builds"
+
 
 async def _download_latest_ytdlp(dest: Path) -> None:
     """Fetch the latest yt-dlp release binary straight from the CDN download
@@ -184,7 +206,7 @@ async def _download_latest_ytdlp(dest: Path) -> None:
     import httpx
 
     asset = _YTDLP_RELEASE_ASSETS.get(_sys.platform, "yt-dlp")
-    url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
+    url = f"https://github.com/{_YTDLP_DOWNLOAD_REPO}/releases/latest/download/{asset}"
     # Unique temp name per attempt: concurrent updates must not interleave
     # writes into one file. Same directory as dest keeps os.replace atomic.
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.new")
