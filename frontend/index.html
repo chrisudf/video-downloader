@@ -12,6 +12,16 @@
     <button id="settings-btn" title="设置">⚙</button>
   </header>
 
+  <!-- First-run tool bootstrap: shown only when yt-dlp / N_m3u8DL-RE /
+       ffmpeg / deno are missing or being downloaded. -->
+  <section id="bootstrap-banner" class="card bootstrap-banner hidden">
+    <div class="row" style="align-items:center">
+      <span id="bootstrap-message">正在检查组件…</span>
+      <button id="bootstrap-btn" class="primary hidden">一键下载缺失组件</button>
+    </div>
+    <div id="bootstrap-steps"></div>
+  </section>
+
   <section class="card">
     <div class="row">
       <input
@@ -132,6 +142,7 @@
       </fieldset>
 
       <div class="dialog-actions">
+        <button type="button" id="quit-app-btn" class="danger" title="停止后台服务并退出程序">退出程序</button>
         <button type="button" id="settings-cancel">取消</button>
         <button type="submit" class="primary">保存</button>
       </div>

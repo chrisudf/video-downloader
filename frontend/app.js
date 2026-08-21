@@ -485,6 +485,18 @@ $("settings-btn").addEventListener("click", async () => {
 
 $("settings-cancel").addEventListener("click", () => settingsDialog.close());
 
+// The packaged app has no window/tray — this is the only quit affordance.
+$("quit-app-btn").addEventListener("click", async () => {
+  if (!confirm("退出程序？正在进行的下载会被取消。")) return;
+  try {
+    await api("/api/shutdown", { method: "POST" });
+  } catch {
+    // Server already gone — that's what we wanted.
+  }
+  document.body.innerHTML =
+    '<div style="padding:48px;text-align:center;color:#8a93a3">程序已退出，可以关闭此页面。<br>再次使用请重新打开 Video Downloader。</div>';
+});
+
 // ===== Tool versions =====
 let lastToolVersions = null;
 
@@ -663,9 +675,117 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
+// ===== First-run tool bootstrap =====
+const bootstrapBanner = $("bootstrap-banner");
+const bootstrapMessage = $("bootstrap-message");
+const bootstrapSteps = $("bootstrap-steps");
+const bootstrapBtn = $("bootstrap-btn");
+let bootstrapTimer = null;
+
+const TOOL_LABELS = {
+  ytdlp: "yt-dlp",
+  m3u8dl: "N_m3u8DL-RE",
+  ffmpeg: "ffmpeg",
+  jsruntime: "deno (YouTube 所需)",
+};
+
+function renderBootstrap(st) {
+  const missing = st.missing || [];
+  const running = st.state === "running";
+
+  if (!running && missing.length === 0) {
+    // Everything present: hide (briefly show success if we were downloading).
+    if (st.state === "done" && !bootstrapBanner.classList.contains("hidden")) {
+      bootstrapMessage.textContent = "✓ 组件就绪，可以开始下载了";
+      bootstrapBtn.classList.add("hidden");
+      setTimeout(() => bootstrapBanner.classList.add("hidden"), 4000);
+    } else {
+      bootstrapBanner.classList.add("hidden");
+    }
+    return;
+  }
+
+  bootstrapBanner.classList.remove("hidden");
+  if (running) {
+    bootstrapMessage.textContent = "首次启动：正在自动下载所需组件（yt-dlp / N_m3u8DL-RE / ffmpeg / deno）…";
+    bootstrapBtn.classList.add("hidden");
+  } else if (st.state === "error") {
+    bootstrapMessage.textContent = "✗ 部分组件下载失败（可重试，或在 ⚙ 设置里手动填工具路径）";
+    bootstrapBtn.textContent = "重试下载";
+    bootstrapBtn.classList.remove("hidden");
+  } else {
+    bootstrapMessage.textContent =
+      "缺少组件：" + missing.map((k) => TOOL_LABELS[k] || k).join("、") + " — 无法下载视频";
+    bootstrapBtn.textContent = "一键下载缺失组件";
+    bootstrapBtn.classList.remove("hidden");
+  }
+
+  bootstrapSteps.innerHTML = "";
+  for (const [key, step] of Object.entries(st.steps || {})) {
+    const line = document.createElement("div");
+    line.className = "bootstrap-step";
+    const pct = step.percent != null ? ` ${step.percent}%` : "";
+    const mark = step.state === "done" ? "✓" : step.state === "error" ? "✗" : "↓";
+    line.textContent = `${mark} ${TOOL_LABELS[key] || key}${pct} — ${step.message || step.state}`;
+    if (step.state === "error") line.classList.add("bootstrap-step-error");
+    if (step.state === "done") line.classList.add("bootstrap-step-done");
+    bootstrapSteps.append(line);
+  }
+}
+
+let bootstrapPollSeq = 0;
+let bootstrapPollFailures = 0;
+
+async function pollBootstrap() {
+  // Sequence guard: a manual retry can start a new loop while a previous
+  // poll is awaiting its fetch — without this, both would keep scheduling
+  // and the page ends up with parallel polling loops racing renders.
+  const seq = ++bootstrapPollSeq;
+  if (bootstrapTimer) {
+    clearTimeout(bootstrapTimer);
+    bootstrapTimer = null;
+  }
+  let st;
+  try {
+    st = await api("/api/tools/bootstrap/status");
+  } catch {
+    // Transient failure (server still starting, sleep/wake mid-download):
+    // keep polling instead of freezing the banner forever. Bounded so an old
+    // backend without this endpoint doesn't get hammered indefinitely.
+    if (seq === bootstrapPollSeq && ++bootstrapPollFailures <= 100) {
+      bootstrapTimer = setTimeout(pollBootstrap, 3000);
+    }
+    return;
+  }
+  bootstrapPollFailures = 0;
+  if (seq !== bootstrapPollSeq) return; // superseded by a newer loop
+  renderBootstrap(st);
+  if (st.state === "running") {
+    bootstrapTimer = setTimeout(pollBootstrap, 1500);
+  } else if ((st.missing || []).length > 0) {
+    // Missing but idle/error — re-check occasionally in case the user fixes
+    // paths in Settings.
+    bootstrapTimer = setTimeout(pollBootstrap, 8000);
+  } else {
+    bootstrapTimer = null;
+  }
+}
+
+bootstrapBtn.addEventListener("click", async () => {
+  bootstrapBtn.classList.add("hidden");
+  try {
+    renderBootstrap(await api("/api/tools/bootstrap", { method: "POST" }));
+  } catch (e) {
+    bootstrapMessage.textContent = "✗ " + e.message;
+  }
+  if (bootstrapTimer) clearTimeout(bootstrapTimer);
+  bootstrapTimer = setTimeout(pollBootstrap, 800);
+});
+
 // ===== Init =====
 (async function init() {
   const cfg = await api("/api/config").catch(() => null);
   if (cfg) saveDirInput.value = cfg.save_dir || "";
   await refreshJobs();
+  pollBootstrap();
 })();

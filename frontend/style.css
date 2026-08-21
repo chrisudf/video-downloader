@@ -358,3 +358,16 @@ dialog label input { margin-top: 4px; }
   justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* ===== First-run bootstrap banner ===== */
+.bootstrap-banner {
+  border-left: 3px solid var(--warn);
+}
+.bootstrap-step {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.bootstrap-step-done { color: var(--ok); }
+.bootstrap-step-error { color: var(--err); }

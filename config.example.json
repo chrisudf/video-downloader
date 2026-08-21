@@ -5,6 +5,9 @@
   "ffmpeg_path": "ffmpeg",
   "port": 8765,
   "max_concurrent_downloads": 2,
+  "auto_download_tools": true,
+  "youtube_player_client": "",
+  "js_runtime": "",
   "custom_headers": {
     "Referer": "https://example.com/"
   }
