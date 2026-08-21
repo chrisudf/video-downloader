@@ -24,6 +24,7 @@ DEFAULT_UA = (
 # Regex helpers
 _STREAM_INF_RE = re.compile(r"#EXT-X-STREAM-INF:([^\n]+)\n([^\n#]+)")
 _M3U8_IN_HTML_RE = re.compile(r"""(?P<u>https?://[^\s'"<>]+\.m3u8[^\s'"<>]*)""", re.IGNORECASE)
+_SCHEME_RE = re.compile(r"https?://", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"(\d+\.\d+)\s*%")
 _HTTP_STATUS_RE = re.compile(r"\b(\d{3})\b\s*\(([^)]+)\)")
 
@@ -85,6 +86,23 @@ def _explain_block(status: int, url: str, body: str) -> str:
     return f"HTTP {status} — the server refused to serve the playlist."
 
 
+
+async def _peek(resp: "httpx.Response", limit: int = 2048) -> str:
+    """First `limit` bytes of a streamed response body, decoded leniently.
+    Returns "" if the body can't be read — callers treat that as "no
+    evidence", never as evidence of a problem."""
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in resp.aiter_bytes(limit):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= limit:
+                break
+        return b"".join(chunks).decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 — body is a nicety, not required
+        return ""
+
 async def _preflight(url: str, headers: dict[str, str]) -> Optional[str]:
     """Fetch the playlist once, with exactly the headers the downloader will
     use, to find out whether it is reachable at all.
@@ -101,17 +119,32 @@ async def _preflight(url: str, headers: dict[str, str]) -> Optional[str]:
         async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
             async with client.stream("GET", url, headers=headers) as resp:
                 if resp.status_code in (401, 403, 404, 410):
-                    body = ""
-                    try:
-                        chunks = []
-                        async for chunk in resp.aiter_bytes(2048):
-                            chunks.append(chunk)
-                            if sum(len(c) for c in chunks) >= 2048:
-                                break
-                        body = b"".join(chunks).decode("utf-8", errors="replace")
-                    except Exception:  # noqa: BLE001 — body is a nicety, not required
-                        pass
-                    return _explain_block(resp.status_code, str(resp.url), body)
+                    return _explain_block(
+                        resp.status_code, str(resp.url), await _peek(resp)
+                    )
+                if resp.is_success:
+                    # A 200 is not proof of a playlist. Player/wrapper routes
+                    # answer 200 with an HTML page, which N_m3u8DL-RE then
+                    # fails on with a segment error that names neither the
+                    # cause nor the URL. Only a body we can positively
+                    # identify as *not* a playlist is treated as fatal —
+                    # anything ambiguous still goes to the real downloader.
+                    body = await _peek(resp)
+                    stripped = body.lstrip("\ufeff \t\r\n")
+                    if not stripped:
+                        return None
+                    if stripped.startswith("#EXTM3U"):
+                        return None
+                    ctype = resp.headers.get("content-type", "").lower()
+                    if stripped[:1] == "<" or "html" in ctype:
+                        return (
+                            f"该地址返回的是网页而不是播放列表（{ctype or 'unknown type'}）。"
+                            f"多半是播放器页面链接，不是真正的 m3u8 —— "
+                            f"请打开播放页用 Inspect，或粘贴真正的 .m3u8 地址。\n"
+                            f"URL: {resp.url}\n"
+                            f"This URL returns a web page, not a playlist — it looks like a "
+                            f"player page rather than the stream itself."
+                        )
     except Exception:  # noqa: BLE001
         # Network hiccup, odd TLS, a server that dislikes httpx specifically —
         # not grounds to refuse the download.
@@ -182,6 +215,34 @@ def _summarize_failure(log_tail: list[str], url: str = "") -> str:
     return "N_m3u8DL-RE exited with no recognizable error message"
 
 
+
+def _innermost_m3u8_url(url: str) -> str:
+    """Unwrap a player URL that carries the real playlist URL inside it.
+
+    Sites front their streams with a player route that simply appends the
+    upstream URL:
+
+        https://site.example/_player_x_/https://cdn.example/x/index.m3u8
+
+    The scan regex can't stop at the inner scheme (none of "://" is excluded
+    from its character class), so it returns the whole thing — which fetches
+    with 200 and hands the downloader an HTML page instead of a playlist.
+
+    Rule: of every absolute URL nested in the string, take the LAST one that
+    still contains ".m3u8". That unwraps the player prefix while leaving a
+    genuine playlist URL whose *query* happens to carry another URL
+    (".../x.m3u8?ref=https://site/page") untouched, since the trailing
+    candidate there has no ".m3u8" in it.
+    """
+    starts = [m.start() for m in _SCHEME_RE.finditer(url)]
+    if len(starts) < 2:
+        return url
+    for start in reversed(starts):
+        candidate = url[start:]
+        if ".m3u8" in candidate.lower():
+            return candidate
+    return url
+
 def _origin(url: str) -> str:
     p = urlparse(url)
     return f"{p.scheme}://{p.netloc}"
@@ -239,13 +300,15 @@ class M3U8Downloader(BaseDownloader):
             if not matches:
                 raise ValueError("No .m3u8 found in page. Paste the direct m3u8 URL.")
             # Prefer the first match that looks like a master playlist
-            best = matches[0].group("u")
+            best = _innermost_m3u8_url(matches[0].group("u"))
             return best, _build_headers(best, page_url)
 
     async def probe(self, url: str, *, referer: Optional[str] = None) -> InspectResult:
         if ".m3u8" in url.lower():
-            m3u8_url = url
-            headers = _build_headers(url, referer)
+            # A user pasting the player URL straight in hits this branch and
+            # would otherwise skip the unwrapping the page scan does.
+            m3u8_url = _innermost_m3u8_url(url)
+            headers = _build_headers(m3u8_url, referer)
         else:
             m3u8_url, headers = await self._fetch_m3u8_from_page(url, referer)
 
@@ -311,12 +374,25 @@ class M3U8Downloader(BaseDownloader):
         if shutil.which(m3u8_path) is None:
             raise FileNotFoundError(f"N_m3u8DL-RE not found at {m3u8_path}. Check config.json")
 
+        # Unwrap a player URL that carries the playlist inside it. The UI
+        # sends the probe's resolved_url, but the direct-m3u8 form sends
+        # whatever the user typed, which may be that wrapper.
+        #
+        # Deliberately no page-to-playlist resolution here: discovering a
+        # playlist inside an arbitrary page needs the headless sniff that
+        # /api/inspect falls back to, which this downloader has no access to.
+        # Duplicating only its weaker regex half would fail on exactly the
+        # sites that need the sniff. A page URL reaching this far is caught
+        # by the preflight below, which says so in as many words.
+        stream_url = _innermost_m3u8_url(request.url)
+        page_headers: dict[str, str] = {}
+
         base = (request.filename_override or request.title or "video").strip()
         safe_title = re.sub(r"[\\/:*?\"<>|]", "_", base).strip() or "video"
 
         args: list[str] = [
             m3u8_path,
-            request.url,
+            stream_url,
             "--save-name", safe_title,
             "--save-dir", str(save_dir),
             "--check-segments-count", "False",
@@ -352,6 +428,10 @@ class M3U8Downloader(BaseDownloader):
         # lower-cased from the browser, so merging raw would keep "referer"
         # and "Referer" as two keys instead of letting the request win.
         normalized = {
+            # Page-derived Referer/UA rank as defaults — configured headers
+            # and this request's own headers still win, matching the
+            # precedence documented in the README.
+            **normalize_headers(page_headers),
             **normalize_headers(config.headers()),
             **normalize_headers(request.headers),
         }
@@ -363,7 +443,7 @@ class M3U8Downloader(BaseDownloader):
         # an unreachable manifest 10 times with no flag to disable it, so a
         # dead URL otherwise burns ~a minute and then reports a misleading
         # "failed to download segments".
-        block = await _preflight(request.url, normalized)
+        block = await _preflight(stream_url, normalized)
         if block:
             await on_progress(ProgressEvent(status="error", message=block))
             raise RuntimeError(block)
@@ -441,7 +521,7 @@ class M3U8Downloader(BaseDownloader):
             await on_progress(ProgressEvent(status="error", message="cancelled"))
             raise asyncio.CancelledError("cancelled")
         if rc != 0:
-            reason = _summarize_failure(log_tail, request.url)
+            reason = _summarize_failure(log_tail, stream_url)
             await on_progress(ProgressEvent(status="error", message=reason))
             raise RuntimeError(reason)
 
