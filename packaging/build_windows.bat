@@ -42,7 +42,9 @@ if defined ISCC (
     REM -ErrorAction Stop + explicit exit: without them a failed archive (no
     REM disk space, destination locked) still returns 0 and the script would
     REM report success with no artifact produced.
-    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try { Compress-Archive -Path 'dist\VideoDownloader\*' -DestinationPath 'dist\VideoDownloader-win64.zip' -Force } catch { Write-Error $_; exit 1 }"
+    REM Zip the folder, not its contents (no \*): the exe only runs next to
+    REM _internal\, and a flat zip invites dragging the exe out on its own.
+    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try { Compress-Archive -Path 'dist\VideoDownloader' -DestinationPath 'dist\VideoDownloader-win64.zip' -Force } catch { Write-Error $_; exit 1 }"
     if errorlevel 1 (
         echo [build] ERROR: failed to create dist\VideoDownloader-win64.zip
         exit /b 1
