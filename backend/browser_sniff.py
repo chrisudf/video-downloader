@@ -86,13 +86,21 @@ async def sniff(
         launch_args = ["--autoplay-policy=no-user-gesture-required", "--mute-audio"]
         headless = (mode == "headless")
         # Bundled Chromium's chrome.exe sometimes fails to launch on Windows
-        # ("spawn UNKNOWN" / SxS manifest errors). Prefer the user's installed
-        # Chrome → Edge → bundled chromium-headless-shell, in that order.
+        # ("spawn UNKNOWN" / SxS manifest errors). Headed: prefer the user's
+        # installed Chrome → Edge → bundled Chromium. Headless: bundled
+        # chromium-headless-shell first (predictable), then fall back to the
+        # system Chrome/Edge run headless — packaged builds ship the
+        # playwright driver but no bundled browser, so without this fallback
+        # auto-sniff would be dead there.
         launch_attempts: list[dict] = []
         if not headless:
             launch_attempts.append({"channel": "chrome", "headless": False, "args": launch_args})
             launch_attempts.append({"channel": "msedge", "headless": False, "args": launch_args})
-        launch_attempts.append({"headless": headless, "args": launch_args})
+            launch_attempts.append({"headless": False, "args": launch_args})
+        else:
+            launch_attempts.append({"headless": True, "args": launch_args})
+            launch_attempts.append({"channel": "chrome", "headless": True, "args": launch_args})
+            launch_attempts.append({"channel": "msedge", "headless": True, "args": launch_args})
 
         browser = None
         last_err: Optional[Exception] = None

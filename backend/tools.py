@@ -5,11 +5,22 @@ from __future__ import annotations
 
 import asyncio
 import re
+import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
 from .config import config
+
+# Extra kwargs for every external-tool spawn. In the packaged Windows build
+# the parent is a GUI-subsystem process (console=False), and spawning a
+# console-subsystem child (yt-dlp.exe / ffmpeg.exe / N_m3u8DL-RE.exe) without
+# this makes Windows allocate a visible console window per invocation — and
+# closing that mystery window kills the download attached to it.
+SPAWN_KWARGS: dict[str, Any] = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+)
 
 
 # yt-dlp uses YYYY.MM.DD version strings (e.g. "2026.03.17").
@@ -29,6 +40,7 @@ async def _run(cmd: list[str], timeout: float = 8.0) -> tuple[int, str, str]:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **SPAWN_KWARGS,
         )
     except FileNotFoundError:
         return -1, "", "file not found"
@@ -64,7 +76,11 @@ async def _ytdlp_info() -> dict[str, Any]:
     # returning None if neither actually exists.
     if shutil.which(path) is None:
         return {"path": path, "available": False}
-    rc, out, err = await _run([path, "--version"], timeout=8.0)
+    # Generous timeout: yt-dlp standalone binaries self-extract on every run
+    # (onefile) and can take >10s cold on a slow disk or under Rosetta /
+    # first-run antivirus scanning — 8s misreported a working install as
+    # unavailable.
+    rc, out, err = await _run([path, "--version"], timeout=25.0)
     version = out.strip().splitlines()[0].strip() if out.strip() else None
     age = None
     if version:
@@ -163,6 +179,16 @@ _YTDLP_RELEASE_ASSETS = {
     "darwin": "yt-dlp_macos",
 }
 
+# Nightly, not stable. YouTube-side enforcement changes land weekly and the
+# stable channel lags them by a month or more: verified 2026-08-19 that
+# stable 2026.07.04 fails every real YouTube download (media URL 403 on the
+# default client, zero formats on web/web_safari, "page needs to be reloaded"
+# on tv — with a JS runtime present) while that day's nightly succeeds with
+# yt-dlp's own default client selection. Nightly is also what upstream tells
+# YouTube-breakage reporters to use. A nightly binary's own -U updates along
+# the nightly channel, so installs keep tracking it automatically.
+_YTDLP_DOWNLOAD_REPO = "yt-dlp/yt-dlp-nightly-builds"
+
 
 async def _download_latest_ytdlp(dest: Path) -> None:
     """Fetch the latest yt-dlp release binary straight from the CDN download
@@ -180,7 +206,7 @@ async def _download_latest_ytdlp(dest: Path) -> None:
     import httpx
 
     asset = _YTDLP_RELEASE_ASSETS.get(_sys.platform, "yt-dlp")
-    url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
+    url = f"https://github.com/{_YTDLP_DOWNLOAD_REPO}/releases/latest/download/{asset}"
     # Unique temp name per attempt: concurrent updates must not interleave
     # writes into one file. Same directory as dest keeps os.replace atomic.
     tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex[:8]}.new")
@@ -316,13 +342,24 @@ async def _verify_executable(path: Path, *, min_size: int = 1_000_000) -> Option
         if head[:2] != b"MZ":
             return "not a valid Windows executable (missing MZ header)"
     else:
-        # yt-dlp on posix ships as a zipimport python archive (starts with a
-        # shebang) rather than an ELF — accept a shebang or ELF magic.
-        if not (head.startswith(b"#!") or head[:4] == b"\x7fELF"):
+        # Accepted posix formats: yt-dlp's linux asset is a zipimport python
+        # archive (shebang), yt-dlp_macos is a Mach-O binary (thin or fat/
+        # universal, either endianness), and ELF covers linux static builds.
+        _MACHO_MAGICS = (
+            b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",  # 32-bit thin
+            b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",  # 64-bit thin
+            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",  # fat / universal
+        )
+        if not (
+            head.startswith(b"#!")
+            or head[:4] == b"\x7fELF"
+            or head[:4] in _MACHO_MAGICS
+        ):
             return "not a recognised executable/script header"
 
-    # Ultimate test: does it actually run?
-    rc, out, err = await _run([str(path), "--version"], timeout=15.0)
+    # Ultimate test: does it actually run? (Cold start of a onefile binary
+    # can be slow — see _ytdlp_info.)
+    rc, out, err = await _run([str(path), "--version"], timeout=30.0)
     if rc != 0 or not out.strip():
         detail = (err or out or "no output").strip()[:200]
         return f"binary did not run: {detail}"
@@ -419,12 +456,20 @@ async def relocate_ytdlp(destination: Optional[str] = None) -> dict[str, Any]:
 
 
 def stale_hint(age_days: Optional[int], threshold: int = 30) -> Optional[str]:
-    """Return a one-line hint if yt-dlp is older than `threshold` days."""
+    """Return a one-line hint if yt-dlp is older than `threshold` days.
+
+    Deliberately hedged: age is measured against the installed build's date,
+    not against what upstream currently offers, so a "45 days old" yt-dlp is
+    often already the newest release there is. Telling the user to update in
+    that situation sends them to a button that reports "up to date" and
+    leaves them thinking the real cause has been ruled out.
+    """
     if age_days is None:
         return None
     if age_days <= threshold:
         return None
     return (
-        f"Your yt-dlp is {age_days} days old — YouTube ships anti-bot changes "
-        f"faster than that. Open Settings ⚙ → click 'Update yt-dlp'."
+        f"Your yt-dlp build is {age_days} days old — if a newer one exists, "
+        f"Settings ⚙ → 'Update yt-dlp' is worth trying first. If it reports "
+        f"'up to date', the cause is elsewhere."
     )

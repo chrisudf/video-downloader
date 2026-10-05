@@ -46,3 +46,7 @@ desktop.ini
 # Build artifacts
 /dist/
 /build/
+
+# Packaging
+.build_venv/
+*.dmg
